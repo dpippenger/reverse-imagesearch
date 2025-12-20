@@ -21,24 +21,24 @@ deps:
 
 # Build the application
 build: deps
-	$(GO) build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME) .
+	$(GO) build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME) ./cmd/imgsearch
 
 # Build with debug symbols
 build-debug: deps
-	$(GO) build -o $(BINARY_NAME) .
+	$(GO) build -o $(BINARY_NAME) ./cmd/imgsearch
 
 # Build for multiple platforms
 build-all: deps
 	@mkdir -p $(BUILD_DIR)
-	GOOS=linux GOARCH=amd64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 .
-	GOOS=linux GOARCH=arm64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 .
-	GOOS=darwin GOARCH=amd64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 .
-	GOOS=darwin GOARCH=arm64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 .
-	GOOS=windows GOARCH=amd64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe .
+	GOOS=linux GOARCH=amd64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 ./cmd/imgsearch
+	GOOS=linux GOARCH=arm64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 ./cmd/imgsearch
+	GOOS=darwin GOARCH=amd64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 ./cmd/imgsearch
+	GOOS=darwin GOARCH=arm64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 ./cmd/imgsearch
+	GOOS=windows GOARCH=amd64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe ./cmd/imgsearch
 
 # Install to GOPATH/bin
 install: deps
-	$(GO) install -ldflags="$(LDFLAGS)" .
+	$(GO) install -ldflags="$(LDFLAGS)" ./cmd/imgsearch
 
 # Clean build artifacts
 clean:
