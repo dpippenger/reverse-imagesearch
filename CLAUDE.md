@@ -1,0 +1,166 @@
+# ImgSearch - Perceptual Image Search Tool
+
+A fast, parallel image similarity search tool using perceptual hashing algorithms. Finds visually similar images across large directories.
+
+## Build & Run
+
+```bash
+# Build
+go build -o imgsearch .
+
+# CLI mode
+./imgsearch -source <image> -dir <search_directory> [-threshold 70] [-workers 0] [-top 10] [-output results.txt]
+
+# Web UI mode
+./imgsearch -web [-port 9183]
+```
+
+## Architecture
+
+### Core Components
+
+**Hashing Algorithms** (lines 31-195)
+- `PerceptualHash()` - DCT-based perceptual hash (pHash), most reliable for scaled/modified images
+- `AverageHash()` - Simple average-based hash (aHash), fast but less robust
+- `DifferenceHash()` - Gradient-based hash (dHash), resistant to scaling
+- `ComputeColorHistogram()` - 16-bin RGB histogram for color comparison
+
+**Similarity Calculation** (lines 315-325)
+- Weighted combination: 35% pHash + 25% dHash + 20% aHash + 20% histogram
+- Returns 0-100% similarity score
+- Threshold default: 70%
+
+**Image Processing**
+- `LoadAndHashImage()` - Load from file path and compute all hashes
+- `LoadAndHashImageFromReader()` - Load from io.Reader (for uploads)
+- `GenerateThumbnail()` - Create base64 JPEG thumbnails for web UI
+- `ExtractExifData()` - Extract EXIF metadata from image files
+
+### Web Server (lines 506-1435)
+
+**Endpoints:**
+- `GET /` - Serves embedded HTML/CSS/JS UI
+- `POST /api/search` - Upload image, returns searchId
+- `GET /api/results/{searchId}` - SSE stream of results
+- `GET /api/thumbnail?path=` - Generate thumbnail for a path
+- `GET /api/browse?path=` - Browse filesystem directories (returns JSON with path, parent, entries)
+- `GET /api/exif?path=` - Get EXIF metadata for an image (returns JSON with camera, date, dimensions, etc.)
+
+**Streaming:**
+- Uses Server-Sent Events (SSE) for real-time results
+- Results sent as they're found by parallel workers
+- Includes progress updates (scanned/total)
+
+**Web UI Features:**
+- Drag & drop or click to upload source image
+- Directory browser for selecting search path
+- Adjustable similarity threshold slider
+- Real-time progress bar with ETA
+- Result cards with thumbnails and similarity scores
+- Info button (i) on each result shows EXIF metadata on hover (lazy-loaded)
+
+### CLI Mode (lines 1463-1609)
+
+- Streams results to stdout as found (unsorted)
+- Optional `-output` writes sorted results to file
+- `-top N` limits output count
+
+## Key Data Structures
+
+```go
+type ImageMatch struct {
+    Path       string  // File path
+    Similarity float64 // 0-100%
+    Hash       uint64  // pHash value
+}
+
+type ImageData struct {
+    Path      string
+    PHash     uint64
+    AHash     uint64
+    DHash     uint64
+    Histogram ColorHistogram
+    Error     error
+}
+
+type SearchConfig struct {
+    SearchDir  string
+    Threshold  float64
+    Workers    int
+    TopN       int
+    Verbose    bool
+    OutputFile string
+}
+
+type BrowseResponse struct {
+    Path    string        // Current directory absolute path
+    Parent  string        // Parent directory path (empty if at root)
+    Entries []BrowseEntry // Directory contents
+    Error   string        // Error message if any
+}
+
+type BrowseEntry struct {
+    Name  string // File/directory name
+    IsDir bool   // True if directory
+    Path  string // Full absolute path
+}
+
+type ExifData struct {
+    Make         string // Camera manufacturer
+    Model        string // Camera model
+    DateTime     string // Date/time taken
+    Width        int    // Image width in pixels
+    Height       int    // Image height in pixels
+    Orientation  string // Image orientation
+    FNumber      string // Aperture (e.g., "f/2.8")
+    ExposureTime string // Shutter speed (e.g., "1/125 s")
+    ISO          string // ISO sensitivity
+    FocalLength  string // Focal length (e.g., "50 mm")
+    LensModel    string // Lens model
+    Software     string // Software used
+    GPSLatitude  string // GPS latitude
+    GPSLongitude string // GPS longitude
+    Error        string // Error message if EXIF extraction failed
+}
+```
+
+## CLI Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-source` | (required) | Source image to match against |
+| `-dir` | `.` | Directory to search |
+| `-threshold` | `70.0` | Minimum similarity % (0-100) |
+| `-workers` | `0` (auto) | Parallel worker count |
+| `-top` | `0` (all) | Limit results |
+| `-output` | (none) | Write sorted results to file |
+| `-verbose` | `false` | Show hash details |
+| `-web` | `false` | Start web UI |
+| `-port` | `9183` | Web UI port |
+
+## Supported Formats
+
+Currently only JPEG files (`.jpg`, `.jpeg`) are indexed. To add formats, modify `IsImageFile()` at line 328.
+
+The image decoder supports JPEG, PNG, and GIF via blank imports, but `IsImageFile()` filters the search.
+
+## Dependencies
+
+- `github.com/nfnt/resize` - Image resizing with Lanczos3 interpolation
+- `github.com/rwcarlsen/goexif/exif` - EXIF metadata extraction from JPEG images
+
+## Performance Notes
+
+- Worker count defaults to `runtime.NumCPU()`
+- Channel buffer sized to total image count
+- Thumbnails generated on-demand (200px max dimension)
+- DCT computation is O(n^4) for 32x32 = 1M operations per image
+- EXIF data is lazy-loaded on hover to minimize API calls
+
+## Known Issues / Future Work
+
+- Only indexes JPEG files (extend `IsImageFile()` for PNG/GIF/WebP)
+- No caching of computed hashes (could add SQLite/BoltDB cache)
+- Web UI doesn't persist settings across page reloads
+- No authentication on web UI (bind to localhost only in production)
+- Large directories: consider adding progress during initial scan phase
