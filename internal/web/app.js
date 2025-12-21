@@ -371,8 +371,10 @@ const searchDirInput = document.getElementById('searchDir');
 
 let currentBrowsePath = '';
 let selectedPath = '';
+let browserTargetInput = null; // Which input to update when a directory is selected
 
 browseBtn.addEventListener('click', () => {
+    browserTargetInput = searchDirInput;
     openBrowser(searchDirInput.value || '');
 });
 
@@ -402,8 +404,8 @@ modalPathInput.addEventListener('keypress', (e) => {
 });
 
 modalSelectBtn.addEventListener('click', () => {
-    if (selectedPath) {
-        searchDirInput.value = selectedPath;
+    if (selectedPath && browserTargetInput) {
+        browserTargetInput.value = selectedPath;
         closeBrowser();
     }
 });
@@ -506,9 +508,9 @@ function renderDirectory(data) {
             const path = item.dataset.path;
             const isDir = item.dataset.isdir === 'true';
 
-            if (isDir) {
+            if (isDir && browserTargetInput) {
                 selectedPath = path;
-                searchDirInput.value = selectedPath;
+                browserTargetInput.value = selectedPath;
                 closeBrowser();
             }
         });
@@ -622,55 +624,9 @@ clearCacheBtn.addEventListener('click', () => {
 });
 
 scanBrowseBtn.addEventListener('click', () => {
-    openScanBrowser(scanDirInput.value || '');
+    browserTargetInput = scanDirInput;
+    openBrowser(scanDirInput.value || '');
 });
-
-function openScanBrowser(startPath) {
-    browserModal.classList.add('active');
-    selectedPath = '';
-    loadDirectoryForScan(startPath);
-}
-
-function loadDirectoryForScan(path) {
-    browserBody.textContent = 'Loading...';
-
-    const url = '/api/browse' + (path ? '?path=' + encodeURIComponent(path) : '');
-
-    fetch(url)
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                browserBody.textContent = data.error;
-                browserBody.className = 'browser-error';
-                return;
-            }
-
-            currentBrowsePath = data.path;
-            selectedPath = data.path;
-            modalPathInput.value = data.path;
-
-            renderDirectoryForScan(data);
-        })
-        .catch(() => {
-            browserBody.textContent = 'Failed to load directory';
-            browserBody.className = 'browser-error';
-        });
-}
-
-function renderDirectoryForScan(data) {
-    renderDirectory(data);
-
-    // Override the select button handler for scan
-    const newSelectBtn = modalSelectBtn.cloneNode(true);
-    modalSelectBtn.parentNode.replaceChild(newSelectBtn, modalSelectBtn);
-
-    newSelectBtn.addEventListener('click', () => {
-        if (selectedPath) {
-            scanDirInput.value = selectedPath;
-            closeBrowser();
-        }
-    });
-}
 
 let scanEventSource = null;
 
