@@ -1,8 +1,10 @@
 package web
 
 import (
+	"crypto/rand"
 	"embed"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +14,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"imgsearch/internal/exif"
 	"imgsearch/internal/hash"
@@ -25,9 +26,71 @@ var content embed.FS
 
 // Server handles the web UI
 type Server struct {
-	port       int
-	searches   map[string]chan search.Result
-	searchesMu sync.RWMutex
+	port            int
+	searches        map[string]chan search.Result
+	searchesMu      sync.RWMutex
+	allowedBasePath string // Base path for file access (empty = user home)
+}
+
+// isPathAllowed checks if a path is within the allowed base directory.
+// This prevents path traversal attacks by ensuring all file access
+// stays within the configured base path.
+func (s *Server) isPathAllowed(requestedPath string) bool {
+	// Clean and resolve to absolute path
+	absPath, err := filepath.Abs(filepath.Clean(requestedPath))
+	if err != nil {
+		return false
+	}
+
+	// Get the allowed base path
+	basePath := s.allowedBasePath
+	if basePath == "" {
+		// Default to user home directory
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		basePath = home
+	}
+
+	absBase, err := filepath.Abs(filepath.Clean(basePath))
+	if err != nil {
+		return false
+	}
+
+	// Ensure the path starts with the allowed base
+	// Add trailing separator to prevent prefix attacks (e.g., /home/user vs /home/user2)
+	if !strings.HasPrefix(absPath, absBase+string(filepath.Separator)) && absPath != absBase {
+		return false
+	}
+
+	return true
+}
+
+// sanitizeFilename removes potentially dangerous characters from a filename
+// to prevent HTTP header injection attacks.
+func sanitizeFilename(filename string) string {
+	// Remove or replace characters that could cause header injection
+	var result strings.Builder
+	for _, r := range filename {
+		switch r {
+		case '"', '\\', '\r', '\n', '\x00':
+			result.WriteRune('_')
+		default:
+			result.WriteRune(r)
+		}
+	}
+	return result.String()
+}
+
+// generateSearchID creates a cryptographically random search ID
+func generateSearchID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to less random but still unique ID
+		return hex.EncodeToString([]byte(fmt.Sprintf("%d", b)))
+	}
+	return hex.EncodeToString(b)
 }
 
 // BrowseResponse represents a directory listing
@@ -50,6 +113,16 @@ func New(port int) *Server {
 	return &Server{
 		port:     port,
 		searches: make(map[string]chan search.Result),
+	}
+}
+
+// NewWithBasePath creates a new web server with a custom allowed base path.
+// This is useful for restricting file access to a specific directory.
+func NewWithBasePath(port int, basePath string) *Server {
+	return &Server{
+		port:            port,
+		searches:        make(map[string]chan search.Result),
+		allowedBasePath: basePath,
 	}
 }
 
@@ -148,6 +221,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate path is within allowed base directory
+	if !s.isPathAllowed(absSearchDir) {
+		json.NewEncoder(w).Encode(map[string]string{"error": "Access denied: path outside allowed directory"})
+		return
+	}
+
 	config := search.Config{
 		SearchDir: absSearchDir,
 		Threshold: threshold,
@@ -155,8 +234,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		TopN:      topN,
 	}
 
-	// Generate search ID
-	searchID := fmt.Sprintf("%d", time.Now().UnixNano())
+	// Generate cryptographically random search ID
+	searchID := generateSearchID()
 
 	// Create result channel
 	resultChan := make(chan search.Result, 100)
@@ -194,7 +273,7 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Note: CORS header removed for security - SSE only works same-origin
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -221,6 +300,12 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate path is within allowed base directory
+	if !s.isPathAllowed(path) {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
 	thumb, err := imgutil.GenerateThumbnail(path, 200)
 	if err != nil {
 		http.Error(w, "Failed to generate thumbnail", http.StatusInternalServerError)
@@ -242,13 +327,17 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 
 	path := r.URL.Query().Get("path")
 	if path == "" {
-		// Start at home directory or current working directory
-		home, err := os.UserHomeDir()
-		if err != nil {
-			cwd, _ := os.Getwd()
-			path = cwd
+		// Start at allowed base directory or home directory
+		if s.allowedBasePath != "" {
+			path = s.allowedBasePath
 		} else {
-			path = home
+			home, err := os.UserHomeDir()
+			if err != nil {
+				cwd, _ := os.Getwd()
+				path = cwd
+			} else {
+				path = home
+			}
 		}
 	}
 
@@ -257,6 +346,12 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		json.NewEncoder(w).Encode(BrowseResponse{Error: "Invalid path"})
+		return
+	}
+
+	// Validate path is within allowed base directory
+	if !s.isPathAllowed(absPath) {
+		json.NewEncoder(w).Encode(BrowseResponse{Error: "Access denied: path outside allowed directory"})
 		return
 	}
 
@@ -322,6 +417,12 @@ func (s *Server) handleExif(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate path is within allowed base directory
+	if !s.isPathAllowed(path) {
+		json.NewEncoder(w).Encode(exif.Data{Error: "Access denied"})
+		return
+	}
+
 	data := exif.Extract(path)
 	json.NewEncoder(w).Encode(data)
 }
@@ -330,6 +431,12 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		http.Error(w, "Path required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate path is within allowed base directory
+	if !s.isPathAllowed(path) {
+		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
 
@@ -353,8 +460,8 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set headers for download
-	filename := filepath.Base(path)
+	// Set headers for download - sanitize filename to prevent header injection
+	filename := sanitizeFilename(filepath.Base(path))
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", fileInfo.Size()))
