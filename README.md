@@ -2,6 +2,25 @@
 
 A fast, parallel image similarity search tool using perceptual hashing algorithms. Find visually similar images across large directories, regardless of resolution, file size, or minor modifications.
 
+## Table of Contents
+
+- [Features](#features)
+- [How It Works](#how-it-works)
+- [Installation](#installation)
+  - [From Source](#from-source)
+  - [Docker](#docker)
+- [Usage](#usage)
+  - [Web UI Mode](#web-ui-mode)
+  - [CLI Mode](#cli-mode)
+- [Options](#options)
+- [Supported Formats](#supported-formats)
+- [Similarity Scores](#similarity-scores)
+- [Example Output](#example-output)
+- [Web UI Screenshot](#web-ui-screenshot)
+- [Hash Caching](#hash-caching)
+- [Performance](#performance)
+- [Dependencies](#dependencies)
+
 ## Features
 
 - **Multiple hashing algorithms** for robust matching (pHash, aHash, dHash, color histogram)
