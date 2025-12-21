@@ -238,7 +238,7 @@ func TestStats(t *testing.T) {
 	testData := &hash.Data{Path: "/test.jpg", PHash: 123}
 
 	// Generate some hits and misses
-	cache.Get("/nonexistent", mtime) // miss
+	cache.Get("/nonexistent", mtime)  // miss
 	cache.Get("/nonexistent2", mtime) // miss
 	cache.Put("/test.jpg", mtime, testData)
 	cache.Get("/test.jpg", mtime) // hit

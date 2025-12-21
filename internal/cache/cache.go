@@ -35,9 +35,9 @@ type ScanProgress struct {
 
 // cacheEntry is the JSON-serialized form of cached hash data
 type cacheEntry struct {
-	PHash     uint64             `json:"phash"`
-	AHash     uint64             `json:"ahash"`
-	DHash     uint64             `json:"dhash"`
+	PHash     uint64              `json:"phash"`
+	AHash     uint64              `json:"ahash"`
+	DHash     uint64              `json:"dhash"`
 	Histogram hash.ColorHistogram `json:"histogram"`
 }
 

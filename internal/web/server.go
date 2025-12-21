@@ -31,7 +31,7 @@ type Server struct {
 	bindAddr        string // Bind address (default "127.0.0.1" for security)
 	searches        map[string]chan search.Result
 	searchesMu      sync.RWMutex
-	allowedBasePath string        // Base path for file access (empty = user home)
+	allowedBasePath string           // Base path for file access (empty = user home)
 	cache           *cache.BoltCache // Optional hash cache
 }
 
