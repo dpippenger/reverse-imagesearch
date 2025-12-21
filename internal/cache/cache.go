@@ -271,3 +271,61 @@ func DefaultPath() (string, error) {
 	}
 	return filepath.Join(home, ".imgsearch", "cache.db"), nil
 }
+
+// DirectoryInfo holds information about a cached directory
+type DirectoryInfo struct {
+	Path  string `json:"path"`
+	Count int    `json:"count"`
+}
+
+// ListDirectories returns a list of unique directories that have cached entries,
+// along with the count of cached images in each directory.
+func (c *BoltCache) ListDirectories() []DirectoryInfo {
+	dirCounts := make(map[string]int)
+
+	c.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketName)
+		if b == nil {
+			return nil
+		}
+
+		cursor := b.Cursor()
+		for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
+			// Key format: path\x00mtime_nanoseconds
+			// Extract the path by finding the null byte
+			keyStr := string(k)
+			nullIdx := -1
+			for i := 0; i < len(keyStr); i++ {
+				if keyStr[i] == 0 {
+					nullIdx = i
+					break
+				}
+			}
+			if nullIdx == -1 {
+				continue
+			}
+
+			path := keyStr[:nullIdx]
+			dir := filepath.Dir(path)
+			dirCounts[dir]++
+		}
+		return nil
+	})
+
+	// Convert to slice and sort by path
+	dirs := make([]DirectoryInfo, 0, len(dirCounts))
+	for path, count := range dirCounts {
+		dirs = append(dirs, DirectoryInfo{Path: path, Count: count})
+	}
+
+	// Sort by path
+	for i := 0; i < len(dirs); i++ {
+		for j := i + 1; j < len(dirs); j++ {
+			if dirs[i].Path > dirs[j].Path {
+				dirs[i], dirs[j] = dirs[j], dirs[i]
+			}
+		}
+	}
+
+	return dirs
+}

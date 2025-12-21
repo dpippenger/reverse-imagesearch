@@ -541,6 +541,7 @@ tabBtns.forEach(btn => {
 
         if (tabId === 'settings') {
             loadCacheStats();
+            loadCachedDirectories();
         }
     });
 });
@@ -597,6 +598,76 @@ function formatNumber(n) {
 
 refreshStatsBtn.addEventListener('click', loadCacheStats);
 
+// Cached Directories
+const cachedDirsContainer = document.getElementById('cachedDirsContainer');
+const refreshDirsBtn = document.getElementById('refreshDirsBtn');
+
+function loadCachedDirectories() {
+    cachedDirsContainer.textContent = '';
+    const loading = document.createElement('div');
+    loading.className = 'cached-dirs-loading';
+    loading.textContent = 'Loading...';
+    cachedDirsContainer.appendChild(loading);
+
+    fetch('/api/cache/directories')
+        .then(response => response.json())
+        .then(data => {
+            cachedDirsContainer.textContent = '';
+
+            if (!data.enabled) {
+                const empty = document.createElement('div');
+                empty.className = 'cached-dirs-empty';
+                empty.textContent = 'Cache not enabled';
+                cachedDirsContainer.appendChild(empty);
+                return;
+            }
+
+            if (!data.directories || data.directories.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'cached-dirs-empty';
+                empty.textContent = 'No directories cached yet';
+                cachedDirsContainer.appendChild(empty);
+                return;
+            }
+
+            renderCachedDirectories(data.directories);
+        })
+        .catch(() => {
+            cachedDirsContainer.textContent = '';
+            const empty = document.createElement('div');
+            empty.className = 'cached-dirs-empty';
+            empty.textContent = 'Failed to load directories';
+            cachedDirsContainer.appendChild(empty);
+        });
+}
+
+function renderCachedDirectories(dirs) {
+    const list = document.createElement('div');
+    list.className = 'cached-dirs-list';
+
+    for (const dir of dirs) {
+        const item = document.createElement('div');
+        item.className = 'cached-dir-item';
+
+        const path = document.createElement('span');
+        path.className = 'cached-dir-path';
+        path.textContent = dir.path;
+
+        const count = document.createElement('span');
+        count.className = 'cached-dir-count';
+        count.textContent = dir.count + ' image' + (dir.count !== 1 ? 's' : '');
+
+        item.appendChild(path);
+        item.appendChild(count);
+        list.appendChild(item);
+    }
+
+    cachedDirsContainer.textContent = '';
+    cachedDirsContainer.appendChild(list);
+}
+
+refreshDirsBtn.addEventListener('click', loadCachedDirectories);
+
 clearCacheBtn.addEventListener('click', () => {
     if (!confirm('Are you sure you want to clear all cached hashes?')) {
         return;
@@ -610,6 +681,7 @@ clearCacheBtn.addEventListener('click', () => {
         .then(data => {
             if (data.success) {
                 loadCacheStats();
+                loadCachedDirectories();
             } else {
                 alert('Failed to clear cache: ' + (data.error || 'Unknown error'));
             }
@@ -665,6 +737,7 @@ scanBtn.addEventListener('click', () => {
             scanBtn.disabled = false;
             scanProgressText.textContent = 'Scan complete! ' + data.cached + ' images cached.';
             loadCacheStats();
+            loadCachedDirectories();
         }
     };
 

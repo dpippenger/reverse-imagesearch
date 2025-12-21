@@ -485,6 +485,70 @@ func TestCloseIdempotent(t *testing.T) {
 	cache.Close()
 }
 
+func TestListDirectories(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	cache, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	defer cache.Close()
+
+	// Initially should be empty
+	dirs := cache.ListDirectories()
+	if len(dirs) != 0 {
+		t.Errorf("expected empty directories, got %d", len(dirs))
+	}
+
+	// Add entries from different directories
+	mtime := time.Now()
+	testData := []struct {
+		path string
+		data *hash.Data
+	}{
+		{"/photos/vacation/img1.jpg", &hash.Data{Path: "/photos/vacation/img1.jpg", PHash: 1}},
+		{"/photos/vacation/img2.jpg", &hash.Data{Path: "/photos/vacation/img2.jpg", PHash: 2}},
+		{"/photos/family/img3.jpg", &hash.Data{Path: "/photos/family/img3.jpg", PHash: 3}},
+		{"/documents/scan.jpg", &hash.Data{Path: "/documents/scan.jpg", PHash: 4}},
+	}
+
+	for _, td := range testData {
+		if err := cache.Put(td.path, mtime, td.data); err != nil {
+			t.Fatalf("failed to put: %v", err)
+		}
+	}
+
+	// List directories
+	dirs = cache.ListDirectories()
+
+	// Should have 3 directories
+	if len(dirs) != 3 {
+		t.Errorf("expected 3 directories, got %d", len(dirs))
+	}
+
+	// Check counts
+	dirMap := make(map[string]int)
+	for _, d := range dirs {
+		dirMap[d.Path] = d.Count
+	}
+
+	if dirMap["/photos/vacation"] != 2 {
+		t.Errorf("expected /photos/vacation to have 2 images, got %d", dirMap["/photos/vacation"])
+	}
+	if dirMap["/photos/family"] != 1 {
+		t.Errorf("expected /photos/family to have 1 image, got %d", dirMap["/photos/family"])
+	}
+	if dirMap["/documents"] != 1 {
+		t.Errorf("expected /documents to have 1 image, got %d", dirMap["/documents"])
+	}
+
+	// Verify sorted order
+	for i := 1; i < len(dirs); i++ {
+		if dirs[i-1].Path > dirs[i].Path {
+			t.Errorf("directories not sorted: %s > %s", dirs[i-1].Path, dirs[i].Path)
+		}
+	}
+}
+
 // contains checks if a string contains a substring
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))

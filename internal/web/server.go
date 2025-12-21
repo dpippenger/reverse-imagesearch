@@ -217,6 +217,7 @@ func (s *Server) Start() error {
 	http.HandleFunc("/api/cache/stats", s.handleCacheStats)
 	http.HandleFunc("/api/cache/scan", s.handleCacheScan)
 	http.HandleFunc("/api/cache/clear", s.handleCacheClear)
+	http.HandleFunc("/api/cache/directories", s.handleCacheDirectories)
 
 	addr := fmt.Sprintf("%s:%d", s.bindAddr, s.port)
 	if s.bindAddr == "0.0.0.0" {
@@ -676,5 +677,26 @@ func (s *Server) handleCacheClear(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
+	})
+}
+
+// CacheDirectoriesResponse holds the list of cached directories
+type CacheDirectoriesResponse struct {
+	Enabled     bool                  `json:"enabled"`
+	Directories []cache.DirectoryInfo `json:"directories"`
+}
+
+func (s *Server) handleCacheDirectories(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if s.cache == nil {
+		json.NewEncoder(w).Encode(CacheDirectoriesResponse{Enabled: false})
+		return
+	}
+
+	dirs := s.cache.ListDirectories()
+	json.NewEncoder(w).Encode(CacheDirectoriesResponse{
+		Enabled:     true,
+		Directories: dirs,
 	})
 }

@@ -1322,6 +1322,70 @@ func TestHandleCacheClear(t *testing.T) {
 	})
 }
 
+func TestHandleCacheDirectories(t *testing.T) {
+	t.Run("returns disabled when no cache", func(t *testing.T) {
+		server := New(8080)
+
+		req := httptest.NewRequest("GET", "/api/cache/directories", nil)
+		w := httptest.NewRecorder()
+
+		server.handleCacheDirectories(w, req)
+
+		var result CacheDirectoriesResponse
+		json.NewDecoder(w.Body).Decode(&result)
+
+		if result.Enabled {
+			t.Error("Expected enabled=false when no cache")
+		}
+	})
+
+	t.Run("returns directories with cache", func(t *testing.T) {
+		server := New(8080)
+
+		cacheDir := t.TempDir()
+		c, err := cache.New(filepath.Join(cacheDir, "cache.db"))
+		if err != nil {
+			t.Fatalf("Failed to create cache: %v", err)
+		}
+		defer c.Close()
+		server.SetCache(c)
+
+		// Add some cached entries
+		mtime := time.Now()
+		c.Put("/photos/img1.jpg", mtime, &hash.Data{Path: "/photos/img1.jpg", PHash: 1})
+		c.Put("/photos/img2.jpg", mtime, &hash.Data{Path: "/photos/img2.jpg", PHash: 2})
+		c.Put("/docs/scan.jpg", mtime, &hash.Data{Path: "/docs/scan.jpg", PHash: 3})
+
+		req := httptest.NewRequest("GET", "/api/cache/directories", nil)
+		w := httptest.NewRecorder()
+
+		server.handleCacheDirectories(w, req)
+
+		var result CacheDirectoriesResponse
+		json.NewDecoder(w.Body).Decode(&result)
+
+		if !result.Enabled {
+			t.Error("Expected enabled=true")
+		}
+		if len(result.Directories) != 2 {
+			t.Errorf("Expected 2 directories, got %d", len(result.Directories))
+		}
+
+		// Check that directories have correct counts
+		dirMap := make(map[string]int)
+		for _, d := range result.Directories {
+			dirMap[d.Path] = d.Count
+		}
+
+		if dirMap["/photos"] != 2 {
+			t.Errorf("Expected /photos to have 2 images, got %d", dirMap["/photos"])
+		}
+		if dirMap["/docs"] != 1 {
+			t.Errorf("Expected /docs to have 1 image, got %d", dirMap["/docs"])
+		}
+	})
+}
+
 func TestHandleCacheScan(t *testing.T) {
 	t.Run("returns error when no cache", func(t *testing.T) {
 		server := NewWithBasePath(8080, os.TempDir())

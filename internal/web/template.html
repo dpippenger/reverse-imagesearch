@@ -586,6 +586,61 @@
             margin-bottom: 15px;
         }
 
+        .cached-dirs-list {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #333;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        .cached-dirs-empty {
+            padding: 20px;
+            text-align: center;
+            color: #666;
+        }
+
+        .cached-dir-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            border-bottom: 1px solid #333;
+            transition: background 0.2s;
+        }
+
+        .cached-dir-item:last-child {
+            border-bottom: none;
+        }
+
+        .cached-dir-item:hover {
+            background: rgba(0, 217, 255, 0.1);
+        }
+
+        .cached-dir-path {
+            font-family: monospace;
+            font-size: 0.9rem;
+            color: #ccc;
+            word-break: break-all;
+        }
+
+        .cached-dir-count {
+            background: linear-gradient(135deg, #00d9ff, #00ff88);
+            color: #000;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            flex-shrink: 0;
+            margin-left: 10px;
+        }
+
+        .cached-dirs-loading {
+            padding: 20px;
+            text-align: center;
+            color: #888;
+        }
+
         .scan-controls {
             display: flex;
             gap: 10px;
@@ -759,6 +814,17 @@
                             </div>
                             <p class="scan-progress-text" id="scanProgressText">Scanning...</p>
                         </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Cached Directories</h3>
+                        <p style="color: #888; margin-bottom: 15px; font-size: 0.9rem;">
+                            Directories with cached image hashes.
+                        </p>
+                        <div id="cachedDirsContainer">
+                            <div class="cached-dirs-loading">Loading...</div>
+                        </div>
+                        <button class="btn btn-secondary" id="refreshDirsBtn" style="margin-top: 10px;">Refresh</button>
                     </div>
 
                     <div class="settings-section">
