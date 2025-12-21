@@ -157,6 +157,47 @@ The image decoder supports JPEG, PNG, and GIF via blank imports, but `IsImageFil
 - DCT computation is O(n^4) for 32x32 = 1M operations per image
 - EXIF data is lazy-loaded on hover to minimize API calls
 
+## Testing Requirements
+
+All new code must include tests:
+- Unit tests for all exported functions
+- Table-driven tests preferred for multiple test cases
+- Minimum 80% coverage for new packages
+- Run `make test` before committing
+- Run `make coverage` to generate coverage report
+
+### Test Commands
+
+```bash
+go test ./...              # Run all tests
+go test -v ./...           # Verbose output
+go test -cover ./...       # Show coverage percentage
+go test -race ./...        # Run with race detector
+make test                  # Run all tests
+make test-race             # Run tests with race detector
+make coverage              # Generate HTML coverage report
+```
+
+### Test Image Generation
+
+Test images are generated programmatically using `internal/testutil`:
+- No binary test fixtures in repository
+- Deterministic, reproducible tests
+- Use `testutil.SolidColorImage()`, `testutil.GradientImage()`, etc.
+
+### Current Coverage
+
+| Package | Coverage |
+|---------|----------|
+| internal/hash | 66% |
+| internal/imgutil | 64% |
+| internal/search | 59% |
+| internal/web | 52% |
+| internal/exif | 20% |
+| cmd/imgsearch | 0% (main function) |
+
+Note: Coverage percentages vary based on test execution. Run `make coverage` for detailed HTML report.
+
 ## Known Issues / Future Work
 
 - Only indexes JPEG files (extend `IsImageFile()` for PNG/GIF/WebP)
