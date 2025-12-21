@@ -549,6 +549,330 @@ func TestListDirectories(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// Integration Tests
+// ============================================================================
+
+// TestIntegrationCachePersistence tests that cache persists across sessions
+func TestIntegrationCachePersistence(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "persistent.db")
+	mtime := time.Now()
+
+	// Session 1: Create cache and add data
+	cache1, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+
+	testData := &hash.Data{
+		Path:  "/test/image.jpg",
+		PHash: 0xDEADBEEF,
+		AHash: 0xCAFEBABE,
+		DHash: 0x12345678,
+	}
+
+	if err := cache1.Put("/test/image.jpg", mtime, testData); err != nil {
+		t.Fatalf("failed to put: %v", err)
+	}
+
+	stats1 := cache1.Stats()
+	if stats1.Entries != 1 {
+		t.Errorf("expected 1 entry, got %d", stats1.Entries)
+	}
+
+	// Close session 1
+	if err := cache1.Close(); err != nil {
+		t.Fatalf("failed to close cache: %v", err)
+	}
+
+	// Session 2: Reopen cache and verify data persisted
+	cache2, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("failed to reopen cache: %v", err)
+	}
+	defer cache2.Close()
+
+	// Verify entry count persisted
+	stats2 := cache2.Stats()
+	if stats2.Entries != 1 {
+		t.Errorf("expected 1 entry after reopen, got %d", stats2.Entries)
+	}
+
+	// Verify data is retrievable
+	data, ok := cache2.Get("/test/image.jpg", mtime)
+	if !ok {
+		t.Fatal("expected to find cached entry after reopen")
+	}
+
+	if data.PHash != testData.PHash {
+		t.Errorf("PHash mismatch after reopen: got %x, want %x", data.PHash, testData.PHash)
+	}
+	if data.AHash != testData.AHash {
+		t.Errorf("AHash mismatch after reopen: got %x, want %x", data.AHash, testData.AHash)
+	}
+	if data.DHash != testData.DHash {
+		t.Errorf("DHash mismatch after reopen: got %x, want %x", data.DHash, testData.DHash)
+	}
+}
+
+// TestIntegrationScanThenSearch tests scanning images then verifying cache hits
+func TestIntegrationScanThenSearch(t *testing.T) {
+	// Create test images
+	images := map[string]image.Image{
+		"red.jpg":    testutil.SolidColorImage(64, 64, color.RGBA{255, 0, 0, 255}),
+		"green.jpg":  testutil.SolidColorImage(64, 64, color.RGBA{0, 255, 0, 255}),
+		"blue.jpg":   testutil.SolidColorImage(64, 64, color.RGBA{0, 0, 255, 255}),
+		"yellow.jpg": testutil.SolidColorImage(64, 64, color.RGBA{255, 255, 0, 255}),
+	}
+	imgDir, cleanup, err := testutil.CreateTempDir(images)
+	if err != nil {
+		t.Fatalf("failed to create test images: %v", err)
+	}
+	defer cleanup()
+
+	// Create cache
+	cache, err := New(filepath.Join(t.TempDir(), "cache.db"))
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	defer cache.Close()
+
+	// Scan directory to populate cache
+	var scanProgress ScanProgress
+	if err := cache.Scan(imgDir, func(p ScanProgress) {
+		scanProgress = p
+	}); err != nil {
+		t.Fatalf("scan failed: %v", err)
+	}
+
+	if scanProgress.Total != 4 {
+		t.Errorf("expected 4 images scanned, got %d", scanProgress.Total)
+	}
+	if scanProgress.Cached != 4 {
+		t.Errorf("expected 4 images cached, got %d", scanProgress.Cached)
+	}
+
+	// Verify cache stats
+	stats := cache.Stats()
+	if stats.Entries != 4 {
+		t.Errorf("expected 4 cache entries, got %d", stats.Entries)
+	}
+
+	// Now simulate searching - get each image by its path and mtime
+	files, _ := filepath.Glob(filepath.Join(imgDir, "*.jpg"))
+	hitsBefore := stats.Hits
+
+	for _, file := range files {
+		info, _ := os.Stat(file)
+		data, ok := cache.Get(file, info.ModTime())
+		if !ok {
+			t.Errorf("expected cache hit for %s", file)
+		}
+		if data.PHash == 0 {
+			t.Errorf("expected non-zero PHash for %s", file)
+		}
+	}
+
+	// Verify we got cache hits
+	statsAfter := cache.Stats()
+	hitsAfter := statsAfter.Hits
+	if hitsAfter-hitsBefore != 4 {
+		t.Errorf("expected 4 cache hits, got %d", hitsAfter-hitsBefore)
+	}
+}
+
+// TestIntegrationCacheInvalidationOnModify tests that modified files miss cache
+func TestIntegrationCacheInvalidationOnModify(t *testing.T) {
+	// Create a test image
+	images := map[string]image.Image{
+		"test.jpg": testutil.SolidColorImage(32, 32, color.RGBA{255, 0, 0, 255}),
+	}
+	imgDir, cleanup, err := testutil.CreateTempDir(images)
+	if err != nil {
+		t.Fatalf("failed to create test images: %v", err)
+	}
+	defer cleanup()
+
+	cache, err := New(filepath.Join(t.TempDir(), "cache.db"))
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	defer cache.Close()
+
+	imgPath := filepath.Join(imgDir, "test.jpg")
+
+	// Get original mtime and cache the image
+	info1, _ := os.Stat(imgPath)
+	mtime1 := info1.ModTime()
+
+	testData := &hash.Data{Path: imgPath, PHash: 12345}
+	cache.Put(imgPath, mtime1, testData)
+
+	// Verify cache hit with original mtime
+	_, ok := cache.Get(imgPath, mtime1)
+	if !ok {
+		t.Error("expected cache hit with original mtime")
+	}
+
+	// Wait a bit and "modify" the file by updating mtime
+	time.Sleep(10 * time.Millisecond)
+	newTime := time.Now()
+	os.Chtimes(imgPath, newTime, newTime)
+
+	// Get new mtime
+	info2, _ := os.Stat(imgPath)
+	mtime2 := info2.ModTime()
+
+	// Verify cache miss with new mtime
+	_, ok = cache.Get(imgPath, mtime2)
+	if ok {
+		t.Error("expected cache miss after file modification")
+	}
+
+	// Verify stats show the miss
+	stats := cache.Stats()
+	if stats.Misses < 1 {
+		t.Error("expected at least 1 cache miss")
+	}
+}
+
+// TestIntegrationListDirectoriesAfterScan tests ListDirectories after scanning
+func TestIntegrationListDirectoriesAfterScan(t *testing.T) {
+	// Create directory structure with subdirectories
+	imgDir, cleanup, err := testutil.CreateTempDirWithSubdirs()
+	if err != nil {
+		t.Fatalf("failed to create test directory: %v", err)
+	}
+	defer cleanup()
+
+	cache, err := New(filepath.Join(t.TempDir(), "cache.db"))
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	defer cache.Close()
+
+	// Scan directory
+	if err := cache.Scan(imgDir, func(p ScanProgress) {}); err != nil {
+		t.Fatalf("scan failed: %v", err)
+	}
+
+	// List directories
+	dirs := cache.ListDirectories()
+
+	// Should have entries from different directories
+	if len(dirs) < 1 {
+		t.Error("expected at least 1 directory after scan")
+	}
+
+	// Verify all directories have positive counts
+	for _, dir := range dirs {
+		if dir.Count <= 0 {
+			t.Errorf("directory %s has invalid count: %d", dir.Path, dir.Count)
+		}
+	}
+}
+
+// TestIntegrationClearAndRescan tests clearing cache then rescanning
+func TestIntegrationClearAndRescan(t *testing.T) {
+	images := map[string]image.Image{
+		"img1.jpg": testutil.SolidColorImage(32, 32, color.RGBA{255, 0, 0, 255}),
+		"img2.jpg": testutil.SolidColorImage(32, 32, color.RGBA{0, 255, 0, 255}),
+	}
+	imgDir, cleanup, err := testutil.CreateTempDir(images)
+	if err != nil {
+		t.Fatalf("failed to create test images: %v", err)
+	}
+	defer cleanup()
+
+	cache, err := New(filepath.Join(t.TempDir(), "cache.db"))
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	defer cache.Close()
+
+	// First scan
+	cache.Scan(imgDir, func(p ScanProgress) {})
+	stats1 := cache.Stats()
+	if stats1.Entries != 2 {
+		t.Errorf("expected 2 entries after first scan, got %d", stats1.Entries)
+	}
+
+	// Clear cache
+	if err := cache.Clear(); err != nil {
+		t.Fatalf("failed to clear cache: %v", err)
+	}
+
+	stats2 := cache.Stats()
+	if stats2.Entries != 0 {
+		t.Errorf("expected 0 entries after clear, got %d", stats2.Entries)
+	}
+
+	// Rescan
+	var rescanProgress ScanProgress
+	cache.Scan(imgDir, func(p ScanProgress) {
+		rescanProgress = p
+	})
+
+	// Should have cached new entries (not reused from cache)
+	if rescanProgress.Cached != 2 {
+		t.Errorf("expected 2 newly cached after rescan, got %d", rescanProgress.Cached)
+	}
+
+	stats3 := cache.Stats()
+	if stats3.Entries != 2 {
+		t.Errorf("expected 2 entries after rescan, got %d", stats3.Entries)
+	}
+}
+
+// TestIntegrationConcurrentScanAndGet tests concurrent scanning and getting
+func TestIntegrationConcurrentScanAndGet(t *testing.T) {
+	images := map[string]image.Image{
+		"a.jpg": testutil.SolidColorImage(32, 32, color.RGBA{255, 0, 0, 255}),
+		"b.jpg": testutil.SolidColorImage(32, 32, color.RGBA{0, 255, 0, 255}),
+		"c.jpg": testutil.SolidColorImage(32, 32, color.RGBA{0, 0, 255, 255}),
+	}
+	imgDir, cleanup, err := testutil.CreateTempDir(images)
+	if err != nil {
+		t.Fatalf("failed to create test images: %v", err)
+	}
+	defer cleanup()
+
+	cache, err := New(filepath.Join(t.TempDir(), "cache.db"))
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	defer cache.Close()
+
+	var wg sync.WaitGroup
+
+	// Start scan in background
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		cache.Scan(imgDir, func(p ScanProgress) {})
+	}()
+
+	// Concurrent Gets while scanning
+	mtime := time.Now()
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cache.Get(filepath.Join(imgDir, "a.jpg"), mtime)
+			cache.Get(filepath.Join(imgDir, "b.jpg"), mtime)
+			cache.Get(filepath.Join(imgDir, "c.jpg"), mtime)
+		}()
+	}
+
+	wg.Wait()
+
+	// Should have completed without panic
+	stats := cache.Stats()
+	if stats.Entries != 3 {
+		t.Errorf("expected 3 entries, got %d", stats.Entries)
+	}
+}
+
 // contains checks if a string contains a substring
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))
