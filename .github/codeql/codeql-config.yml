@@ -1,0 +1,8 @@
+name: "ImgSearch CodeQL Config"
+
+queries:
+  - uses: security-and-quality
+
+paths-ignore:
+  - '**/testdata/**'
+  - '**/*_test.go'
