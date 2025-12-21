@@ -20,8 +20,67 @@ const thresholdValue = document.getElementById('thresholdValue');
 let selectedFile = null;
 let eventSource = null;
 
+// Settings Persistence
+const STORAGE_KEY_PREFIX = 'imgsearch_';
+
+function loadSettings() {
+    const savedSearchDir = localStorage.getItem(STORAGE_KEY_PREFIX + 'searchDir');
+    if (savedSearchDir) {
+        document.getElementById('searchDir').value = savedSearchDir;
+    }
+
+    const savedThreshold = localStorage.getItem(STORAGE_KEY_PREFIX + 'threshold');
+    if (savedThreshold) {
+        threshold.value = savedThreshold;
+        thresholdValue.textContent = savedThreshold + '%';
+    }
+
+    const savedWorkers = localStorage.getItem(STORAGE_KEY_PREFIX + 'workers');
+    if (savedWorkers) {
+        document.getElementById('workers').value = savedWorkers;
+    }
+
+    const savedTopN = localStorage.getItem(STORAGE_KEY_PREFIX + 'topN');
+    if (savedTopN) {
+        document.getElementById('topN').value = savedTopN;
+    }
+
+    const savedScanDir = localStorage.getItem(STORAGE_KEY_PREFIX + 'scanDir');
+    if (savedScanDir) {
+        document.getElementById('scanDir').value = savedScanDir;
+    }
+
+    const savedTab = localStorage.getItem(STORAGE_KEY_PREFIX + 'activeTab');
+    if (savedTab) {
+        const tabBtn = document.querySelector('.tab-btn[data-tab="' + savedTab + '"]');
+        if (tabBtn) {
+            tabBtn.click();
+        }
+    }
+}
+
+function saveSetting(key, value) {
+    localStorage.setItem(STORAGE_KEY_PREFIX + key, value);
+}
+
+// Initialize settings on page load
+document.addEventListener('DOMContentLoaded', loadSettings);
+
 threshold.addEventListener('input', () => {
     thresholdValue.textContent = threshold.value + '%';
+    saveSetting('threshold', threshold.value);
+});
+
+document.getElementById('searchDir').addEventListener('change', (e) => {
+    saveSetting('searchDir', e.target.value);
+});
+
+document.getElementById('workers').addEventListener('change', (e) => {
+    saveSetting('workers', e.target.value);
+});
+
+document.getElementById('topN').addEventListener('change', (e) => {
+    saveSetting('topN', e.target.value);
 });
 
 uploadArea.addEventListener('click', () => fileInput.click());
@@ -406,6 +465,12 @@ modalPathInput.addEventListener('keypress', (e) => {
 modalSelectBtn.addEventListener('click', () => {
     if (selectedPath && browserTargetInput) {
         browserTargetInput.value = selectedPath;
+        // Save the setting based on which input was updated
+        if (browserTargetInput.id === 'searchDir') {
+            saveSetting('searchDir', selectedPath);
+        } else if (browserTargetInput.id === 'scanDir') {
+            saveSetting('scanDir', selectedPath);
+        }
         closeBrowser();
     }
 });
@@ -511,6 +576,12 @@ function renderDirectory(data) {
             if (isDir && browserTargetInput) {
                 selectedPath = path;
                 browserTargetInput.value = selectedPath;
+                // Save the setting based on which input was updated
+                if (browserTargetInput.id === 'searchDir') {
+                    saveSetting('searchDir', selectedPath);
+                } else if (browserTargetInput.id === 'scanDir') {
+                    saveSetting('scanDir', selectedPath);
+                }
                 closeBrowser();
             }
         });
@@ -538,6 +609,7 @@ tabBtns.forEach(btn => {
 
         btn.classList.add('active');
         document.getElementById(tabId + 'Tab').classList.add('active');
+        saveSetting('activeTab', tabId);
 
         if (tabId === 'settings') {
             loadCacheStats();
@@ -554,6 +626,9 @@ const statHitRate = document.getElementById('statHitRate');
 const statSize = document.getElementById('statSize');
 const statHits = document.getElementById('statHits');
 const scanDirInput = document.getElementById('scanDir');
+scanDirInput.addEventListener('change', () => {
+    saveSetting('scanDir', scanDirInput.value);
+});
 const scanBrowseBtn = document.getElementById('scanBrowseBtn');
 const scanBtn = document.getElementById('scanBtn');
 const scanProgress = document.getElementById('scanProgress');

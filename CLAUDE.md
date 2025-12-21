@@ -267,6 +267,5 @@ The following security improvements are recommended for production deployment:
 ## Known Issues / Future Work
 
 - Only indexes JPEG files (extend `IsImageFile()` for PNG/GIF/WebP)
-- Web UI doesn't persist settings across page reloads
 - No authentication on web UI (bind to localhost only in production)
 - Large directories: consider adding progress during initial scan phase
