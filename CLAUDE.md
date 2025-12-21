@@ -187,16 +187,16 @@ Test images are generated programmatically using `internal/testutil`:
 
 ### Current Coverage
 
-| Package | Coverage |
-|---------|----------|
-| internal/hash | 66% |
-| internal/imgutil | 64% |
-| internal/search | 59% |
-| internal/web | 52% |
-| internal/exif | 20% |
-| cmd/imgsearch | 0% (main function) |
+| Package | Coverage | Notes |
+|---------|----------|-------|
+| internal/hash | 100% | All hash algorithms fully tested |
+| internal/imgutil | 98% | Image processing fully tested |
+| internal/search | 91% | Search engine with parallel workers |
+| internal/web | 85% | Server startup (0%) excluded |
+| internal/exif | 30% | Requires real EXIF images for full coverage |
+| cmd/imgsearch | 0% | Main function (hard to unit test) |
 
-Note: Coverage percentages vary based on test execution. Run `make coverage` for detailed HTML report.
+Note: Individual package coverage is measured by running `go test -cover ./internal/<pkg>/...`. The exif package has lower coverage because EXIF field extraction requires images with embedded EXIF metadata, which cannot be easily generated programmatically.
 
 ## Known Issues / Future Work
 

@@ -197,3 +197,17 @@ func saveJPEG(path string, img image.Image) error {
 	defer file.Close()
 	return jpeg.Encode(file, img, &jpeg.Options{Quality: 90})
 }
+
+// CreateTempJPEGWithExif creates a temporary JPEG file.
+// Note: This creates a standard JPEG without real EXIF metadata.
+// Testing real EXIF extraction requires images with embedded EXIF data.
+func CreateTempJPEGWithExif() (string, error) {
+	// Create a simple small JPEG
+	img := image.NewGray(image.Rect(0, 0, 8, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			img.Set(x, y, color.Gray{128})
+		}
+	}
+	return CreateTempJPEG(img)
+}
