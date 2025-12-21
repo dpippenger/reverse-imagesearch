@@ -499,7 +499,7 @@ func TestListDirectories(t *testing.T) {
 		t.Errorf("expected empty directories, got %d", len(dirs))
 	}
 
-	// Add entries from different directories
+	// Add entries from different directories (within 4 levels)
 	mtime := time.Now()
 	testData := []struct {
 		path string
@@ -545,6 +545,79 @@ func TestListDirectories(t *testing.T) {
 	for i := 1; i < len(dirs); i++ {
 		if dirs[i-1].Path > dirs[i].Path {
 			t.Errorf("directories not sorted: %s > %s", dirs[i-1].Path, dirs[i].Path)
+		}
+	}
+}
+
+func TestListDirectoriesDepthLimit(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	cache, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create cache: %v", err)
+	}
+	defer cache.Close()
+
+	mtime := time.Now()
+	testData := []struct {
+		path string
+		data *hash.Data
+	}{
+		// Deep paths that should be truncated to 4 levels
+		{"/home/user/photos/2024/vacation/beach/img1.jpg", &hash.Data{PHash: 1}},
+		{"/home/user/photos/2024/vacation/mountain/img2.jpg", &hash.Data{PHash: 2}},
+		{"/home/user/photos/2024/family/reunion/img3.jpg", &hash.Data{PHash: 3}},
+		// Shallow path within 4 levels
+		{"/home/user/docs/scan.jpg", &hash.Data{PHash: 4}},
+	}
+
+	for _, td := range testData {
+		if err := cache.Put(td.path, mtime, td.data); err != nil {
+			t.Fatalf("failed to put: %v", err)
+		}
+	}
+
+	dirs := cache.ListDirectories()
+
+	// Build map for easier testing
+	dirMap := make(map[string]int)
+	for _, d := range dirs {
+		dirMap[d.Path] = d.Count
+	}
+
+	// The deep paths should be aggregated at /home/user/photos/2024
+	// (4 levels: home, user, photos, 2024)
+	if dirMap["/home/user/photos/2024"] != 3 {
+		t.Errorf("expected /home/user/photos/2024 to have 3 images (aggregated), got %d. Dirs: %v", dirMap["/home/user/photos/2024"], dirMap)
+	}
+
+	// The shallow path should show as /home/user/docs
+	if dirMap["/home/user/docs"] != 1 {
+		t.Errorf("expected /home/user/docs to have 1 image, got %d", dirMap["/home/user/docs"])
+	}
+
+	// Should not have the full deep paths
+	if _, exists := dirMap["/home/user/photos/2024/vacation/beach"]; exists {
+		t.Error("should not have deep path /home/user/photos/2024/vacation/beach")
+	}
+}
+
+func TestTruncateDirPath(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"/a/b/c", "/a/b/c"},                                          // 3 levels, unchanged
+		{"/a/b/c/d", "/a/b/c/d"},                                      // 4 levels, unchanged
+		{"/a/b/c/d/e", "/a/b/c/d"},                                    // 5 levels, truncated
+		{"/a/b/c/d/e/f/g", "/a/b/c/d"},                                // 7 levels, truncated
+		{"/home/user/photos/2024/vacation", "/home/user/photos/2024"}, // 5 levels
+		{"a/b/c/d/e", "a/b/c/d"},                                      // relative path, 5 levels
+	}
+
+	for _, tt := range tests {
+		result := truncateDirPath(tt.input)
+		if result != tt.expected {
+			t.Errorf("truncateDirPath(%q) = %q, want %q", tt.input, result, tt.expected)
 		}
 	}
 }

@@ -278,8 +278,48 @@ type DirectoryInfo struct {
 	Count int    `json:"count"`
 }
 
+// maxDirDepth limits how deep directory paths are shown in ListDirectories
+const maxDirDepth = 4
+
+// truncateDirPath limits a directory path to maxDirDepth levels
+func truncateDirPath(dir string) string {
+	// Handle empty path
+	if dir == "" {
+		return dir
+	}
+
+	// Check if path is absolute
+	isAbsolute := dir[0] == '/'
+
+	// Split path into components
+	var parts []string
+	cleaned := filepath.Clean(dir)
+	for cleaned != "" && cleaned != "/" && cleaned != "." {
+		parts = append([]string{filepath.Base(cleaned)}, parts...)
+		parent := filepath.Dir(cleaned)
+		if parent == cleaned {
+			break
+		}
+		cleaned = parent
+	}
+
+	// Truncate to maxDirDepth levels
+	if len(parts) > maxDirDepth {
+		parts = parts[:maxDirDepth]
+	}
+
+	// Reconstruct path
+	result := filepath.Join(parts...)
+	if isAbsolute {
+		result = "/" + result
+	}
+
+	return result
+}
+
 // ListDirectories returns a list of unique directories that have cached entries,
 // along with the count of cached images in each directory.
+// Directories deeper than 4 levels are aggregated at the 4th level.
 func (c *BoltCache) ListDirectories() []DirectoryInfo {
 	dirCounts := make(map[string]int)
 
@@ -307,7 +347,9 @@ func (c *BoltCache) ListDirectories() []DirectoryInfo {
 
 			path := keyStr[:nullIdx]
 			dir := filepath.Dir(path)
-			dirCounts[dir]++
+			// Truncate to max depth
+			truncatedDir := truncateDirPath(dir)
+			dirCounts[truncatedDir]++
 		}
 		return nil
 	})
