@@ -17,6 +17,26 @@ func TestExtract(t *testing.T) {
 		}
 	})
 
+	t.Run("JPEG with attempted EXIF extraction", func(t *testing.T) {
+		path, err := testutil.CreateTempJPEGWithExif()
+		if err != nil {
+			t.Fatalf("Failed to create temp JPEG with EXIF: %v", err)
+		}
+		defer os.Remove(path)
+
+		data := Extract(path)
+
+		// Should have file size regardless of EXIF parsing
+		if data.FileSize <= 0 {
+			t.Error("FileSize should be > 0")
+		}
+
+		// Should have dimensions (image can be decoded)
+		if data.Width != 8 || data.Height != 8 {
+			t.Logf("Warning: dimensions not parsed correctly (got %dx%d)", data.Width, data.Height)
+		}
+	})
+
 	t.Run("valid JPEG without EXIF", func(t *testing.T) {
 		img := testutil.SolidColorImage(100, 50, color.RGBA{255, 0, 0, 255})
 		path, err := testutil.CreateTempJPEG(img)

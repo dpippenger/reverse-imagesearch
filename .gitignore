@@ -1,0 +1,19 @@
+# Binary
+imgsearch
+
+# Build directory
+build/
+
+# Coverage files
+coverage.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

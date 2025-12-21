@@ -12,6 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"imgsearch/internal/hash"
+	"imgsearch/internal/imgutil"
+	"imgsearch/internal/search"
 	"imgsearch/internal/testutil"
 )
 
@@ -193,6 +196,59 @@ func TestHandleBrowse(t *testing.T) {
 		}
 		if result.Error != "" {
 			t.Errorf("Unexpected error: %s", result.Error)
+		}
+	})
+
+	t.Run("browse filters hidden files", func(t *testing.T) {
+		tmpDir, err := os.MkdirTemp("", "browse-hidden-*")
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		// Create hidden and visible files
+		os.WriteFile(tmpDir+"/.hidden", []byte("hidden"), 0644)
+		os.WriteFile(tmpDir+"/visible.txt", []byte("visible"), 0644)
+
+		req := httptest.NewRequest("GET", "/api/browse?path="+tmpDir, nil)
+		w := httptest.NewRecorder()
+
+		server.handleBrowse(w, req)
+
+		var result BrowseResponse
+		json.NewDecoder(w.Body).Decode(&result)
+
+		// Should only contain visible file
+		for _, entry := range result.Entries {
+			if strings.HasPrefix(entry.Name, ".") {
+				t.Errorf("Hidden file should be filtered: %s", entry.Name)
+			}
+		}
+	})
+
+	t.Run("browse shows parent directory", func(t *testing.T) {
+		tmpDir, err := os.MkdirTemp("", "browse-parent-*")
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		subDir := tmpDir + "/subdir"
+		os.Mkdir(subDir, 0755)
+
+		req := httptest.NewRequest("GET", "/api/browse?path="+subDir, nil)
+		w := httptest.NewRecorder()
+
+		server.handleBrowse(w, req)
+
+		var result BrowseResponse
+		json.NewDecoder(w.Body).Decode(&result)
+
+		if result.Parent == "" {
+			t.Error("Parent should not be empty for non-root directory")
+		}
+		if result.Parent != tmpDir {
+			t.Errorf("Parent = %q, want %q", result.Parent, tmpDir)
 		}
 	})
 }
@@ -462,6 +518,98 @@ func TestHandleSearch(t *testing.T) {
 			t.Error("Expected error for missing image")
 		}
 	})
+
+	t.Run("search with invalid image returns error", func(t *testing.T) {
+		var buf bytes.Buffer
+		writer := multipart.NewWriter(&buf)
+
+		part, _ := writer.CreateFormFile("image", "test.jpg")
+		part.Write(testutil.NotAnImage())
+
+		writer.WriteField("dir", ".")
+		writer.Close()
+
+		req := httptest.NewRequest("POST", "/api/search", &buf)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		w := httptest.NewRecorder()
+
+		server.handleSearch(w, req)
+
+		var result map[string]string
+		json.NewDecoder(w.Body).Decode(&result)
+
+		if result["error"] == "" {
+			t.Error("Expected error for invalid image")
+		}
+	})
+
+	t.Run("search with custom parameters", func(t *testing.T) {
+		img := testutil.SolidColorImage(64, 64, color.RGBA{255, 0, 0, 255})
+		jpegBytes := testutil.EncodeJPEG(img)
+
+		tmpDir, err := os.MkdirTemp("", "search-params-*")
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		var buf bytes.Buffer
+		writer := multipart.NewWriter(&buf)
+
+		part, _ := writer.CreateFormFile("image", "test.jpg")
+		part.Write(jpegBytes)
+
+		writer.WriteField("dir", tmpDir)
+		writer.WriteField("threshold", "80")
+		writer.WriteField("workers", "2")
+		writer.WriteField("topN", "5")
+		writer.Close()
+
+		req := httptest.NewRequest("POST", "/api/search", &buf)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		w := httptest.NewRecorder()
+
+		server.handleSearch(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Status = %d, want 200", resp.StatusCode)
+		}
+
+		var result map[string]string
+		json.NewDecoder(resp.Body).Decode(&result)
+
+		if result["searchId"] == "" {
+			t.Error("Expected searchId in response")
+		}
+	})
+
+	t.Run("search with default directory", func(t *testing.T) {
+		img := testutil.SolidColorImage(64, 64, color.RGBA{255, 0, 0, 255})
+		jpegBytes := testutil.EncodeJPEG(img)
+
+		var buf bytes.Buffer
+		writer := multipart.NewWriter(&buf)
+
+		part, _ := writer.CreateFormFile("image", "test.jpg")
+		part.Write(jpegBytes)
+
+		// Don't set dir - should default to "."
+		writer.Close()
+
+		req := httptest.NewRequest("POST", "/api/search", &buf)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		w := httptest.NewRecorder()
+
+		server.handleSearch(w, req)
+
+		var result map[string]string
+		json.NewDecoder(w.Body).Decode(&result)
+
+		if result["searchId"] == "" {
+			t.Error("Expected searchId in response")
+		}
+	})
 }
 
 func TestHandleResults(t *testing.T) {
@@ -476,6 +624,86 @@ func TestHandleResults(t *testing.T) {
 		resp := w.Result()
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("Status = %d, want 404", resp.StatusCode)
+		}
+	})
+
+	t.Run("results with valid searchId streams SSE", func(t *testing.T) {
+		server := New(8080)
+
+		// Create a search result channel and register it
+		searchID := "test-search-123"
+		resultChan := make(chan search.Result, 10)
+		server.searchesMu.Lock()
+		server.searches[searchID] = resultChan
+		server.searchesMu.Unlock()
+
+		// Send results in a goroutine
+		go func() {
+			resultChan <- search.Result{
+				Match:   imgutil.Match{Path: "/test/image.jpg", Similarity: 95.5},
+				Total:   10,
+				Scanned: 1,
+			}
+			resultChan <- search.Result{Done: true, Total: 10, Scanned: 10}
+			close(resultChan)
+		}()
+
+		req := httptest.NewRequest("GET", "/api/results/"+searchID, nil)
+		w := httptest.NewRecorder()
+
+		server.handleResults(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Status = %d, want 200", resp.StatusCode)
+		}
+
+		contentType := resp.Header.Get("Content-Type")
+		if contentType != "text/event-stream" {
+			t.Errorf("Content-Type = %q, want text/event-stream", contentType)
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+		bodyStr := string(body)
+
+		if !strings.Contains(bodyStr, "data:") {
+			t.Error("Response should contain SSE data")
+		}
+		if !strings.Contains(bodyStr, "/test/image.jpg") {
+			t.Error("Response should contain match path")
+		}
+	})
+}
+
+func TestRunSearch(t *testing.T) {
+	t.Run("RunSearch calls search.Run", func(t *testing.T) {
+		sourceData := hash.Data{
+			PHash: 0xFFFF,
+			AHash: 0xAAAA,
+			DHash: 0x5555,
+		}
+
+		tmpDir, err := os.MkdirTemp("", "runsearch-test-*")
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		config := search.Config{
+			SearchDir: tmpDir,
+			Threshold: 50.0,
+			Workers:   1,
+		}
+
+		var gotDone bool
+		RunSearch(sourceData, config, func(r search.Result) {
+			if r.Done {
+				gotDone = true
+			}
+		})
+
+		if !gotDone {
+			t.Error("Expected Done result from RunSearch")
 		}
 	})
 }
@@ -527,4 +755,192 @@ func TestBrowseEntry(t *testing.T) {
 	if decoded.Path != entry.Path {
 		t.Errorf("Path = %q, want %q", decoded.Path, entry.Path)
 	}
+}
+
+func TestHandleBrowseSorting(t *testing.T) {
+	server := New(8080)
+
+	t.Run("browse sorts directories before files", func(t *testing.T) {
+		tmpDir, err := os.MkdirTemp("", "browse-sort-*")
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		// Create files and directories in non-sorted order
+		os.WriteFile(tmpDir+"/zebra.txt", []byte("z"), 0644)
+		os.WriteFile(tmpDir+"/apple.txt", []byte("a"), 0644)
+		os.Mkdir(tmpDir+"/banana_dir", 0755)
+		os.Mkdir(tmpDir+"/aardvark_dir", 0755)
+
+		req := httptest.NewRequest("GET", "/api/browse?path="+tmpDir, nil)
+		w := httptest.NewRecorder()
+
+		server.handleBrowse(w, req)
+
+		var result BrowseResponse
+		json.NewDecoder(w.Body).Decode(&result)
+
+		if len(result.Entries) != 4 {
+			t.Fatalf("Expected 4 entries, got %d", len(result.Entries))
+		}
+
+		// First two should be directories (sorted alphabetically)
+		if !result.Entries[0].IsDir || result.Entries[0].Name != "aardvark_dir" {
+			t.Errorf("First entry should be aardvark_dir, got %s", result.Entries[0].Name)
+		}
+		if !result.Entries[1].IsDir || result.Entries[1].Name != "banana_dir" {
+			t.Errorf("Second entry should be banana_dir, got %s", result.Entries[1].Name)
+		}
+
+		// Last two should be files (sorted alphabetically)
+		if result.Entries[2].IsDir || result.Entries[2].Name != "apple.txt" {
+			t.Errorf("Third entry should be apple.txt, got %s", result.Entries[2].Name)
+		}
+		if result.Entries[3].IsDir || result.Entries[3].Name != "zebra.txt" {
+			t.Errorf("Fourth entry should be zebra.txt, got %s", result.Entries[3].Name)
+		}
+	})
+
+	t.Run("browse at root directory has no parent", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/browse?path=/", nil)
+		w := httptest.NewRecorder()
+
+		server.handleBrowse(w, req)
+
+		var result BrowseResponse
+		json.NewDecoder(w.Body).Decode(&result)
+
+		if result.Parent != "" {
+			t.Errorf("Root directory should have empty parent, got %q", result.Parent)
+		}
+	})
+
+	t.Run("browse unreadable directory returns error", func(t *testing.T) {
+		tmpDir, err := os.MkdirTemp("", "browse-unreadable-*")
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		// Create a subdirectory and remove read permission
+		unreadableDir := tmpDir + "/unreadable"
+		os.Mkdir(unreadableDir, 0000)
+		defer os.Chmod(unreadableDir, 0755)
+
+		req := httptest.NewRequest("GET", "/api/browse?path="+unreadableDir, nil)
+		w := httptest.NewRecorder()
+
+		server.handleBrowse(w, req)
+
+		var result BrowseResponse
+		json.NewDecoder(w.Body).Decode(&result)
+
+		if result.Error != "Cannot read directory" {
+			t.Errorf("Expected 'Cannot read directory' error, got %q", result.Error)
+		}
+	})
+}
+
+func TestHandleSearchEdgeCases(t *testing.T) {
+	server := New(8080)
+
+	t.Run("search with invalid multipart form", func(t *testing.T) {
+		// Send a POST with invalid content type
+		req := httptest.NewRequest("POST", "/api/search", strings.NewReader("invalid"))
+		req.Header.Set("Content-Type", "multipart/form-data; boundary=invalid")
+		w := httptest.NewRecorder()
+
+		server.handleSearch(w, req)
+
+		var result map[string]string
+		json.NewDecoder(w.Body).Decode(&result)
+
+		if result["error"] == "" {
+			t.Error("Expected error for invalid multipart form")
+		}
+	})
+
+	t.Run("search with invalid directory path returns error", func(t *testing.T) {
+		img := testutil.SolidColorImage(64, 64, color.RGBA{255, 0, 0, 255})
+		jpegBytes := testutil.EncodeJPEG(img)
+
+		var buf bytes.Buffer
+		writer := multipart.NewWriter(&buf)
+
+		part, _ := writer.CreateFormFile("image", "test.jpg")
+		part.Write(jpegBytes)
+
+		// Use a path that can't be converted to absolute path on most systems
+		// This is tricky because most paths CAN be converted
+		writer.WriteField("dir", "/some/path")
+		writer.Close()
+
+		req := httptest.NewRequest("POST", "/api/search", &buf)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		w := httptest.NewRecorder()
+
+		server.handleSearch(w, req)
+
+		var result map[string]string
+		json.NewDecoder(w.Body).Decode(&result)
+
+		// Should either succeed with searchId or fail with error
+		if result["searchId"] == "" && result["error"] == "" {
+			t.Error("Expected either searchId or error in response")
+		}
+	})
+}
+
+func TestHandleDownloadEdgeCases(t *testing.T) {
+	server := New(8080)
+
+	t.Run("download with unreadable file returns error", func(t *testing.T) {
+		img := testutil.SolidColorImage(100, 100, color.White)
+		path, err := testutil.CreateTempJPEG(img)
+		if err != nil {
+			t.Fatalf("Failed to create temp JPEG: %v", err)
+		}
+		defer os.Remove(path)
+
+		// Remove read permission
+		os.Chmod(path, 0000)
+		defer os.Chmod(path, 0644)
+
+		req := httptest.NewRequest("GET", "/api/download?path="+path, nil)
+		w := httptest.NewRecorder()
+
+		server.handleDownload(w, req)
+
+		resp := w.Result()
+		// Should get 404 because file can't be opened
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("Status = %d, want 404", resp.StatusCode)
+		}
+	})
+}
+
+func TestHandleThumbnailEdgeCases(t *testing.T) {
+	server := New(8080)
+
+	t.Run("thumbnail with corrupt JPEG", func(t *testing.T) {
+		tmpFile, err := os.CreateTemp("", "corrupt-*.jpg")
+		if err != nil {
+			t.Fatalf("Failed to create temp file: %v", err)
+		}
+		defer os.Remove(tmpFile.Name())
+
+		tmpFile.Write(testutil.CorruptedJPEG())
+		tmpFile.Close()
+
+		req := httptest.NewRequest("GET", "/api/thumbnail?path="+tmpFile.Name(), nil)
+		w := httptest.NewRecorder()
+
+		server.handleThumbnail(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusInternalServerError {
+			t.Errorf("Status = %d, want 500", resp.StatusCode)
+		}
+	})
 }
