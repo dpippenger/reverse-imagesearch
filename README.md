@@ -60,32 +60,10 @@ Pre-built images are available on [DockerHub](https://hub.docker.com/r/dpippenge
 
 ```bash
 docker pull dpippenger/reverse-imagesearch
-```
-
-#### Running with Docker
-
-**Web UI mode** (default):
-
-```bash
-# Run web UI on port 9183, mounting your images directory
 docker run -p 9183:9183 -v /path/to/images:/images dpippenger/reverse-imagesearch
-
-# With persistent hash cache
-docker run -p 9183:9183 \
-  -v /path/to/images:/images \
-  -v imgsearch-cache:/app/cache \
-  dpippenger/reverse-imagesearch -web -bind 0.0.0.0 -cache-path /app/cache/cache.db
 ```
 
-Then open `http://localhost:9183` and browse to `/images` to search.
-
-**CLI mode**:
-
-```bash
-# Find similar images
-docker run -v /path/to/images:/images dpippenger/reverse-imagesearch \
-  -source /images/query.jpg -dir /images -threshold 70
-```
+See [DOCKER.md](DOCKER.md) for full Docker documentation including CLI mode, caching, and Docker Compose examples.
 
 ## Usage
 
