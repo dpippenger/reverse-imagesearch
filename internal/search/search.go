@@ -2,9 +2,11 @@ package search
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"sync"
 
+	"imgsearch/internal/cache"
 	"imgsearch/internal/hash"
 	"imgsearch/internal/imgutil"
 )
@@ -17,6 +19,7 @@ type Config struct {
 	TopN       int
 	Verbose    bool
 	OutputFile string
+	Cache      cache.Cache // Optional hash cache for faster repeated searches
 }
 
 // Result is sent for each match found
@@ -61,7 +64,27 @@ func Run(sourceData hash.Data, config Config, callback func(Result)) {
 		go func() {
 			defer wg.Done()
 			for path := range imageChan {
-				data := imgutil.LoadAndHash(path)
+				var data hash.Data
+
+				// Try cache first
+				if config.Cache != nil {
+					if info, err := os.Stat(path); err == nil {
+						if cached, ok := config.Cache.Get(path, info.ModTime()); ok {
+							data = *cached
+						}
+					}
+				}
+
+				// Compute if not cached
+				if data.Path == "" {
+					data = imgutil.LoadAndHash(path)
+					// Cache the result if we have a cache and no error
+					if config.Cache != nil && data.Error == nil {
+						if info, err := os.Stat(path); err == nil {
+							config.Cache.Put(path, info.ModTime(), &data)
+						}
+					}
+				}
 
 				resultMutex.Lock()
 				scanned++

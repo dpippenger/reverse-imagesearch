@@ -522,3 +522,199 @@ document.addEventListener('keydown', (e) => {
         }
     }
 });
+
+// Tab Navigation
+const tabBtns = document.querySelectorAll('.tab-btn');
+const tabContents = document.querySelectorAll('.tab-content');
+
+tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        const tabId = btn.dataset.tab;
+
+        tabBtns.forEach(b => b.classList.remove('active'));
+        tabContents.forEach(c => c.classList.remove('active'));
+
+        btn.classList.add('active');
+        document.getElementById(tabId + 'Tab').classList.add('active');
+
+        if (tabId === 'settings') {
+            loadCacheStats();
+        }
+    });
+});
+
+// Cache Settings
+const cacheEnabled = document.getElementById('cacheEnabled');
+const cacheDisabled = document.getElementById('cacheDisabled');
+const statEntries = document.getElementById('statEntries');
+const statHitRate = document.getElementById('statHitRate');
+const statSize = document.getElementById('statSize');
+const statHits = document.getElementById('statHits');
+const scanDirInput = document.getElementById('scanDir');
+const scanBrowseBtn = document.getElementById('scanBrowseBtn');
+const scanBtn = document.getElementById('scanBtn');
+const scanProgress = document.getElementById('scanProgress');
+const scanProgressBar = document.getElementById('scanProgressBar');
+const scanProgressText = document.getElementById('scanProgressText');
+const refreshStatsBtn = document.getElementById('refreshStatsBtn');
+const clearCacheBtn = document.getElementById('clearCacheBtn');
+
+function loadCacheStats() {
+    fetch('/api/cache/stats')
+        .then(response => response.json())
+        .then(data => {
+            if (!data.enabled) {
+                cacheEnabled.style.display = 'none';
+                cacheDisabled.style.display = 'block';
+                return;
+            }
+
+            cacheEnabled.style.display = 'block';
+            cacheDisabled.style.display = 'none';
+
+            statEntries.textContent = formatNumber(data.entries);
+            statHitRate.textContent = data.hitRate.toFixed(1) + '%';
+            statSize.textContent = data.sizeMB.toFixed(2) + ' MB';
+            statHits.textContent = formatNumber(data.hits);
+        })
+        .catch(() => {
+            cacheEnabled.style.display = 'none';
+            cacheDisabled.style.display = 'block';
+        });
+}
+
+function formatNumber(n) {
+    if (n >= 1000000) {
+        return (n / 1000000).toFixed(1) + 'M';
+    }
+    if (n >= 1000) {
+        return (n / 1000).toFixed(1) + 'K';
+    }
+    return String(n);
+}
+
+refreshStatsBtn.addEventListener('click', loadCacheStats);
+
+clearCacheBtn.addEventListener('click', () => {
+    if (!confirm('Are you sure you want to clear all cached hashes?')) {
+        return;
+    }
+
+    clearCacheBtn.disabled = true;
+    clearCacheBtn.textContent = 'Clearing...';
+
+    fetch('/api/cache/clear', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                loadCacheStats();
+            } else {
+                alert('Failed to clear cache: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch(err => {
+            alert('Failed to clear cache: ' + err.message);
+        })
+        .finally(() => {
+            clearCacheBtn.disabled = false;
+            clearCacheBtn.textContent = 'Clear Cache';
+        });
+});
+
+scanBrowseBtn.addEventListener('click', () => {
+    openScanBrowser(scanDirInput.value || '');
+});
+
+function openScanBrowser(startPath) {
+    browserModal.classList.add('active');
+    selectedPath = '';
+    loadDirectoryForScan(startPath);
+}
+
+function loadDirectoryForScan(path) {
+    browserBody.textContent = 'Loading...';
+
+    const url = '/api/browse' + (path ? '?path=' + encodeURIComponent(path) : '');
+
+    fetch(url)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                browserBody.textContent = data.error;
+                browserBody.className = 'browser-error';
+                return;
+            }
+
+            currentBrowsePath = data.path;
+            selectedPath = data.path;
+            modalPathInput.value = data.path;
+
+            renderDirectoryForScan(data);
+        })
+        .catch(() => {
+            browserBody.textContent = 'Failed to load directory';
+            browserBody.className = 'browser-error';
+        });
+}
+
+function renderDirectoryForScan(data) {
+    renderDirectory(data);
+
+    // Override the select button handler for scan
+    const newSelectBtn = modalSelectBtn.cloneNode(true);
+    modalSelectBtn.parentNode.replaceChild(newSelectBtn, modalSelectBtn);
+
+    newSelectBtn.addEventListener('click', () => {
+        if (selectedPath) {
+            scanDirInput.value = selectedPath;
+            closeBrowser();
+        }
+    });
+}
+
+let scanEventSource = null;
+
+scanBtn.addEventListener('click', () => {
+    const dir = scanDirInput.value.trim();
+    if (!dir) {
+        alert('Please enter a directory to scan');
+        return;
+    }
+
+    scanBtn.disabled = true;
+    scanProgress.classList.add('active');
+    scanProgressBar.style.width = '0%';
+    scanProgressText.textContent = 'Starting scan...';
+
+    scanEventSource = new EventSource('/api/cache/scan?dir=' + encodeURIComponent(dir));
+
+    scanEventSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.error) {
+            scanProgressText.textContent = 'Error: ' + data.error;
+            scanEventSource.close();
+            scanBtn.disabled = false;
+            return;
+        }
+
+        if (data.total > 0) {
+            const percent = Math.round((data.scanned / data.total) * 100);
+            scanProgressBar.style.width = percent + '%';
+            scanProgressText.textContent = 'Scanned ' + data.scanned + ' of ' + data.total + ' images (' + data.cached + ' cached)';
+        }
+
+        if (data.done) {
+            scanEventSource.close();
+            scanBtn.disabled = false;
+            scanProgressText.textContent = 'Scan complete! ' + data.cached + ' images cached.';
+            loadCacheStats();
+        }
+    };
+
+    scanEventSource.onerror = () => {
+        scanEventSource.close();
+        scanBtn.disabled = false;
+        scanProgressText.textContent = 'Scan error or interrupted';
+    };
+});

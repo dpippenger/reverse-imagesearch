@@ -3,15 +3,19 @@ package web
 import (
 	"bytes"
 	"encoding/json"
+	"image"
 	"image/color"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"imgsearch/internal/cache"
 	"imgsearch/internal/hash"
 	"imgsearch/internal/imgutil"
 	"imgsearch/internal/search"
@@ -1176,4 +1180,361 @@ func TestPathTraversalPrevention(t *testing.T) {
 			t.Errorf("error = %q, want access denied", result.Error)
 		}
 	})
+}
+
+// Cache endpoint tests
+
+func TestHandleCacheStats(t *testing.T) {
+	t.Run("returns disabled when no cache", func(t *testing.T) {
+		server := New(8080)
+
+		req := httptest.NewRequest("GET", "/api/cache/stats", nil)
+		w := httptest.NewRecorder()
+
+		server.handleCacheStats(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Status = %d, want 200", resp.StatusCode)
+		}
+
+		var result CacheStatsResponse
+		json.NewDecoder(resp.Body).Decode(&result)
+
+		if result.Enabled {
+			t.Error("Expected Enabled=false when no cache")
+		}
+	})
+
+	t.Run("returns stats when cache is enabled", func(t *testing.T) {
+		server := New(8080)
+
+		// Create a cache
+		cacheDir := t.TempDir()
+		c, err := cache.New(filepath.Join(cacheDir, "cache.db"))
+		if err != nil {
+			t.Fatalf("Failed to create cache: %v", err)
+		}
+		defer c.Close()
+		server.SetCache(c)
+
+		req := httptest.NewRequest("GET", "/api/cache/stats", nil)
+		w := httptest.NewRecorder()
+
+		server.handleCacheStats(w, req)
+
+		var result CacheStatsResponse
+		json.NewDecoder(w.Body).Decode(&result)
+
+		if !result.Enabled {
+			t.Error("Expected Enabled=true with cache")
+		}
+	})
+
+	t.Run("calculates hit rate correctly", func(t *testing.T) {
+		server := New(8080)
+
+		cacheDir := t.TempDir()
+		c, err := cache.New(filepath.Join(cacheDir, "cache.db"))
+		if err != nil {
+			t.Fatalf("Failed to create cache: %v", err)
+		}
+		defer c.Close()
+		server.SetCache(c)
+
+		// Generate some cache activity with time.Now()
+		mtime := time.Now()
+
+		// Do a search to populate cache misses
+		c.Get("/nonexistent", mtime)
+		c.Get("/nonexistent2", mtime)
+
+		req := httptest.NewRequest("GET", "/api/cache/stats", nil)
+		w := httptest.NewRecorder()
+
+		server.handleCacheStats(w, req)
+
+		var result CacheStatsResponse
+		json.NewDecoder(w.Body).Decode(&result)
+
+		if result.Misses != 2 {
+			t.Errorf("Expected 2 misses, got %d", result.Misses)
+		}
+	})
+}
+
+func TestHandleCacheClear(t *testing.T) {
+	t.Run("returns error when no cache", func(t *testing.T) {
+		server := New(8080)
+
+		req := httptest.NewRequest("POST", "/api/cache/clear", nil)
+		w := httptest.NewRecorder()
+
+		server.handleCacheClear(w, req)
+
+		var result map[string]interface{}
+		json.NewDecoder(w.Body).Decode(&result)
+
+		if result["success"] != false {
+			t.Error("Expected success=false when no cache")
+		}
+		if result["error"] == nil {
+			t.Error("Expected error message")
+		}
+	})
+
+	t.Run("clears cache successfully", func(t *testing.T) {
+		server := New(8080)
+
+		cacheDir := t.TempDir()
+		c, err := cache.New(filepath.Join(cacheDir, "cache.db"))
+		if err != nil {
+			t.Fatalf("Failed to create cache: %v", err)
+		}
+		defer c.Close()
+		server.SetCache(c)
+
+		req := httptest.NewRequest("POST", "/api/cache/clear", nil)
+		w := httptest.NewRecorder()
+
+		server.handleCacheClear(w, req)
+
+		var result map[string]interface{}
+		json.NewDecoder(w.Body).Decode(&result)
+
+		if result["success"] != true {
+			t.Error("Expected success=true")
+		}
+	})
+
+	t.Run("rejects GET requests", func(t *testing.T) {
+		server := New(8080)
+
+		req := httptest.NewRequest("GET", "/api/cache/clear", nil)
+		w := httptest.NewRecorder()
+
+		server.handleCacheClear(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("Status = %d, want 405", resp.StatusCode)
+		}
+	})
+}
+
+func TestHandleCacheScan(t *testing.T) {
+	t.Run("returns error when no cache", func(t *testing.T) {
+		server := NewWithBasePath(8080, os.TempDir())
+
+		req := httptest.NewRequest("POST", "/api/cache/scan?dir="+os.TempDir(), nil)
+		w := httptest.NewRecorder()
+
+		server.handleCacheScan(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("Status = %d, want 400", resp.StatusCode)
+		}
+	})
+
+	t.Run("rejects PUT requests", func(t *testing.T) {
+		server := New(8080)
+
+		req := httptest.NewRequest("PUT", "/api/cache/scan", nil)
+		w := httptest.NewRecorder()
+
+		server.handleCacheScan(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("Status = %d, want 405", resp.StatusCode)
+		}
+	})
+
+	t.Run("requires directory parameter", func(t *testing.T) {
+		server := New(8080)
+
+		cacheDir := t.TempDir()
+		c, _ := cache.New(filepath.Join(cacheDir, "cache.db"))
+		defer c.Close()
+		server.SetCache(c)
+
+		req := httptest.NewRequest("POST", "/api/cache/scan", nil)
+		w := httptest.NewRecorder()
+
+		server.handleCacheScan(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("Status = %d, want 400", resp.StatusCode)
+		}
+	})
+
+	t.Run("rejects path traversal", func(t *testing.T) {
+		server := NewWithBasePath(8080, os.TempDir())
+
+		cacheDir := t.TempDir()
+		c, _ := cache.New(filepath.Join(cacheDir, "cache.db"))
+		defer c.Close()
+		server.SetCache(c)
+
+		req := httptest.NewRequest("POST", "/api/cache/scan?dir=/etc", nil)
+		w := httptest.NewRecorder()
+
+		server.handleCacheScan(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("Status = %d, want 403", resp.StatusCode)
+		}
+	})
+
+	t.Run("scans directory and returns SSE", func(t *testing.T) {
+		// Create temp directory with images
+		images := map[string]image.Image{
+			"red.jpg": testutil.SolidColorImage(32, 32, color.RGBA{255, 0, 0, 255}),
+		}
+		imgDir, cleanup, err := testutil.CreateTempDir(images)
+		if err != nil {
+			t.Fatalf("Failed to create test directory: %v", err)
+		}
+		defer cleanup()
+
+		server := NewWithBasePath(8080, imgDir)
+
+		cacheDir := t.TempDir()
+		c, _ := cache.New(filepath.Join(cacheDir, "cache.db"))
+		defer c.Close()
+		server.SetCache(c)
+
+		req := httptest.NewRequest("POST", "/api/cache/scan?dir="+imgDir, nil)
+		w := httptest.NewRecorder()
+
+		server.handleCacheScan(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Status = %d, want 200", resp.StatusCode)
+		}
+
+		contentType := resp.Header.Get("Content-Type")
+		if contentType != "text/event-stream" {
+			t.Errorf("Content-Type = %q, want text/event-stream", contentType)
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+		bodyStr := string(body)
+
+		if !strings.Contains(bodyStr, "data:") {
+			t.Error("Response should contain SSE data")
+		}
+		if !strings.Contains(bodyStr, "\"done\":true") {
+			t.Error("Response should contain done:true")
+		}
+	})
+}
+
+func TestNewWithCache(t *testing.T) {
+	t.Run("creates server with cache", func(t *testing.T) {
+		cacheDir := t.TempDir()
+		cachePath := filepath.Join(cacheDir, "cache.db")
+
+		server, err := NewWithCache(8080, "127.0.0.1", os.TempDir(), cachePath)
+		if err != nil {
+			t.Fatalf("Failed to create server: %v", err)
+		}
+		defer server.Close()
+
+		if server.cache == nil {
+			t.Error("Expected cache to be set")
+		}
+	})
+
+	t.Run("creates server without cache when path is empty", func(t *testing.T) {
+		server, err := NewWithCache(8080, "127.0.0.1", os.TempDir(), "")
+		if err != nil {
+			t.Fatalf("Failed to create server: %v", err)
+		}
+		defer server.Close()
+
+		if server.cache != nil {
+			t.Error("Expected cache to be nil when path is empty")
+		}
+	})
+
+	t.Run("returns error for invalid cache path", func(t *testing.T) {
+		_, err := NewWithCache(8080, "127.0.0.1", os.TempDir(), "/dev/null/invalid/cache.db")
+		if err == nil {
+			t.Error("Expected error for invalid cache path")
+		}
+	})
+
+	t.Run("defaults to localhost when bindAddr is empty", func(t *testing.T) {
+		cacheDir := t.TempDir()
+		cachePath := filepath.Join(cacheDir, "cache.db")
+
+		server, err := NewWithCache(8080, "", os.TempDir(), cachePath)
+		if err != nil {
+			t.Fatalf("Failed to create server: %v", err)
+		}
+		defer server.Close()
+
+		if server.bindAddr != "127.0.0.1" {
+			t.Errorf("bindAddr = %q, want 127.0.0.1", server.bindAddr)
+		}
+	})
+}
+
+func TestServerClose(t *testing.T) {
+	t.Run("closes cache when present", func(t *testing.T) {
+		cacheDir := t.TempDir()
+		cachePath := filepath.Join(cacheDir, "cache.db")
+
+		server, err := NewWithCache(8080, "127.0.0.1", os.TempDir(), cachePath)
+		if err != nil {
+			t.Fatalf("Failed to create server: %v", err)
+		}
+
+		if err := server.Close(); err != nil {
+			t.Errorf("Close() returned error: %v", err)
+		}
+	})
+
+	t.Run("succeeds when no cache", func(t *testing.T) {
+		server := New(8080)
+
+		if err := server.Close(); err != nil {
+			t.Errorf("Close() returned error: %v", err)
+		}
+	})
+}
+
+func TestCacheStatsResponse(t *testing.T) {
+	resp := CacheStatsResponse{
+		Enabled:   true,
+		Hits:      100,
+		Misses:    20,
+		HitRate:   83.3,
+		Entries:   500,
+		SizeBytes: 1024000,
+		SizeMB:    1.0,
+	}
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("Failed to marshal: %v", err)
+	}
+
+	var decoded CacheStatsResponse
+	json.Unmarshal(data, &decoded)
+
+	if decoded.Enabled != resp.Enabled {
+		t.Errorf("Enabled = %v, want %v", decoded.Enabled, resp.Enabled)
+	}
+	if decoded.Hits != resp.Hits {
+		t.Errorf("Hits = %d, want %d", decoded.Hits, resp.Hits)
+	}
+	if decoded.HitRate != resp.HitRate {
+		t.Errorf("HitRate = %f, want %f", decoded.HitRate, resp.HitRate)
+	}
 }

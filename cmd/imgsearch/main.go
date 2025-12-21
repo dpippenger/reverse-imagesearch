@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync"
 
+	"imgsearch/internal/cache"
 	"imgsearch/internal/hash"
 	"imgsearch/internal/imgutil"
 	"imgsearch/internal/web"
@@ -26,12 +27,30 @@ func main() {
 	webMode := flag.Bool("web", false, "Start web UI instead of CLI")
 	webPort := flag.Int("port", 9183, "Port for web UI")
 	webBind := flag.String("bind", "127.0.0.1", "Bind address for web UI (use 0.0.0.0 for network access)")
+	cachePath := flag.String("cache-path", "", "Path to cache database file (enables hash caching)")
+	noCache := flag.Bool("no-cache", false, "Disable hash caching even if cache-path is set")
 
 	flag.Parse()
+
+	// Initialize cache if requested
+	var hashCache *cache.BoltCache
+	if *cachePath != "" && !*noCache {
+		var err error
+		hashCache, err = cache.New(*cachePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to open cache: %v\n", err)
+		} else {
+			defer hashCache.Close()
+		}
+	}
 
 	// Web mode
 	if *webMode {
 		server := web.NewWithOptions(*webPort, *webBind, "")
+		if hashCache != nil {
+			server.SetCache(hashCache)
+			fmt.Printf("Hash caching enabled: %s\n", *cachePath)
+		}
 		if err := server.Start(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error starting web server: %v\n", err)
 			os.Exit(1)
@@ -121,7 +140,28 @@ func main() {
 		go func() {
 			defer wg.Done()
 			for path := range imageChan {
-				data := imgutil.LoadAndHash(path)
+				var data hash.Data
+
+				// Try cache first
+				if hashCache != nil {
+					if info, err := os.Stat(path); err == nil {
+						if cached, ok := hashCache.Get(path, info.ModTime()); ok {
+							data = *cached
+						}
+					}
+				}
+
+				// Compute if not cached
+				if data.Path == "" {
+					data = imgutil.LoadAndHash(path)
+					// Cache the result
+					if hashCache != nil && data.Error == nil {
+						if info, err := os.Stat(path); err == nil {
+							hashCache.Put(path, info.ModTime(), &data)
+						}
+					}
+				}
+
 				if data.Error != nil {
 					if *verbose {
 						fmt.Fprintf(os.Stderr, "Skipping %s: %v\n", path, data.Error)

@@ -10,6 +10,7 @@ A fast, parallel image similarity search tool using perceptual hashing algorithm
 - **CLI mode** for scripting and automation
 - **Streaming output** - see results as they're found
 - **File export** - save sorted results to a file
+- **Hash caching** - BoltDB-based persistent cache for faster repeated searches
 
 ## How It Works
 
@@ -44,6 +45,9 @@ Start the web server:
 
 # Custom port
 ./imgsearch -web -port 8080
+
+# With hash caching enabled (recommended for large directories)
+./imgsearch -web -cache-path ~/.imgsearch/cache.db
 
 # Allow network access (bind to all interfaces)
 ./imgsearch -web -bind 0.0.0.0
@@ -85,6 +89,9 @@ The web UI provides:
 
 # Specify number of parallel workers
 ./imgsearch -source photo.jpg -dir ~/Pictures -workers 8
+
+# Enable hash caching for faster repeated searches
+./imgsearch -source photo.jpg -dir ~/Pictures -cache-path ~/.imgsearch/cache.db
 ```
 
 ## Options
@@ -101,6 +108,8 @@ The web UI provides:
 | `-web` | Start web UI instead of CLI | `false` |
 | `-port` | Port for web UI | `9183` |
 | `-bind` | Bind address for web UI | `127.0.0.1` |
+| `-cache-path` | Path to BoltDB cache file (enables caching) | (none) |
+| `-no-cache` | Disable caching even if cache-path is set | `false` |
 
 ## Supported Formats
 
@@ -160,13 +169,43 @@ The web interface features:
 - Thumbnail grid showing matches with similarity percentages
 - Configurable parameters via sliders and input fields
 
+## Hash Caching
+
+For large image collections, hash caching can significantly speed up repeated searches. The first scan computes and stores image hashes in a BoltDB database. Subsequent searches retrieve hashes from the cache instead of recomputing them.
+
+### How It Works
+
+- Hashes are keyed by file path and modification time
+- If a file is modified, its hash is automatically recomputed
+- Cache persists across sessions in a single `.db` file
+- The DCT-based perceptual hash is the most expensive operation (O(n^4) for each image)
+
+### Web UI Settings
+
+When caching is enabled, the web UI includes a **Settings** tab with:
+- **Cache Statistics**: View entries, hit rate, and cache size
+- **Scan to Cache**: Pre-populate the cache for a directory
+- **Clear Cache**: Remove all cached entries
+
+### Recommended Usage
+
+```bash
+# Enable caching for web UI (recommended)
+./imgsearch -web -cache-path ~/.imgsearch/cache.db
+
+# Enable caching for CLI searches
+./imgsearch -source photo.jpg -dir ~/Pictures -cache-path ~/.imgsearch/cache.db
+```
+
 ## Performance
 
 - Automatically uses all CPU cores by default
 - Processes images in parallel with configurable worker count
 - Generates thumbnails on-demand for web UI
 - Handles large directories (tested with 10,000+ images)
+- Hash caching provides 10-100x speedup for repeated searches
 
 ## Dependencies
 
 - [github.com/nfnt/resize](https://github.com/nfnt/resize) - High-quality image resizing
+- [go.etcd.io/bbolt](https://github.com/etcd-io/bbolt) - Embedded key/value database for hash caching

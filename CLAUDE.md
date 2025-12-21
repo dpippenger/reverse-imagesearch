@@ -36,6 +36,24 @@ go build -o imgsearch .
 - `GenerateThumbnail()` - Create base64 JPEG thumbnails for web UI
 - `ExtractExifData()` - Extract EXIF metadata from image files
 
+### Hash Caching (`internal/cache`)
+
+BoltDB-based persistent cache for computed image hashes. Eliminates redundant O(n⁴) DCT computations on repeated searches.
+
+**Key Features:**
+- Hashes keyed by `path\x00mtime_nanoseconds` (auto-invalidates on file modification)
+- Thread-safe concurrent access
+- Persistent across sessions in single `.db` file
+- 10-100x speedup for repeated searches
+
+**Interface:**
+- `Get(path, mtime)` - Retrieve cached hash data
+- `Put(path, mtime, data)` - Store hash data
+- `Clear()` - Remove all cached entries
+- `Stats()` - Return hit/miss counts, entry count, size
+- `Scan(dir, callback)` - Pre-populate cache for directory (SSE progress)
+- `Close()` - Close database connection
+
 ### Web Server (lines 506-1435)
 
 **Endpoints:**
@@ -45,6 +63,9 @@ go build -o imgsearch .
 - `GET /api/thumbnail?path=` - Generate thumbnail for a path
 - `GET /api/browse?path=` - Browse filesystem directories (returns JSON with path, parent, entries)
 - `GET /api/exif?path=` - Get EXIF metadata for an image (returns JSON with camera, date, dimensions, etc.)
+- `GET /api/cache/stats` - Return cache statistics (entries, hits, misses, size)
+- `GET/POST /api/cache/scan?path=` - Pre-populate cache for directory (SSE progress stream)
+- `POST /api/cache/clear` - Clear all cached entries
 
 **Streaming:**
 - Uses Server-Sent Events (SSE) for real-time results
@@ -58,6 +79,7 @@ go build -o imgsearch .
 - Real-time progress bar with ETA
 - Result cards with thumbnails and similarity scores
 - Info button (i) on each result shows EXIF metadata on hover (lazy-loaded)
+- Settings tab with cache management (stats, scan, clear)
 
 ### CLI Mode (lines 1463-1609)
 
@@ -90,6 +112,22 @@ type SearchConfig struct {
     TopN       int
     Verbose    bool
     OutputFile string
+    Cache      cache.Cache // Optional hash cache
+}
+
+type CacheStats struct {
+    Hits      int64 // Cache hit count
+    Misses    int64 // Cache miss count
+    Entries   int64 // Number of cached entries
+    SizeBytes int64 // Cache file size in bytes
+}
+
+type ScanProgress struct {
+    Scanned int    // Images scanned so far
+    Total   int    // Total images to scan
+    Cached  int    // New entries added to cache
+    Done    bool   // Whether scan is complete
+    Error   string // Error message if any
 }
 
 type BrowseResponse struct {
@@ -138,6 +176,8 @@ type ExifData struct {
 | `-web` | `false` | Start web UI |
 | `-port` | `9183` | Web UI port |
 | `-bind` | `127.0.0.1` | Bind address (use `0.0.0.0` for network access) |
+| `-cache-path` | (none) | Path to BoltDB cache file (enables hash caching) |
+| `-no-cache` | `false` | Disable caching even if cache-path is set |
 
 ## Supported Formats
 
@@ -149,6 +189,7 @@ The image decoder supports JPEG, PNG, and GIF via blank imports, but `IsImageFil
 
 - `github.com/nfnt/resize` - Image resizing with Lanczos3 interpolation
 - `github.com/rwcarlsen/goexif/exif` - EXIF metadata extraction from JPEG images
+- `go.etcd.io/bbolt` - Embedded key/value database for hash caching
 
 ## Performance Notes
 
@@ -157,6 +198,7 @@ The image decoder supports JPEG, PNG, and GIF via blank imports, but `IsImageFil
 - Thumbnails generated on-demand (200px max dimension)
 - DCT computation is O(n^4) for 32x32 = 1M operations per image
 - EXIF data is lazy-loaded on hover to minimize API calls
+- Hash caching provides 10-100x speedup for repeated searches (eliminates DCT recomputation)
 
 ## Testing Requirements
 
@@ -194,6 +236,7 @@ Test images are generated programmatically using `internal/testutil`:
 | internal/imgutil | 98% | Image processing fully tested |
 | internal/search | 91% | Search engine with parallel workers |
 | internal/web | 85% | Server startup (0%) excluded |
+| internal/cache | 83% | BoltDB hash caching |
 | internal/exif | 30% | Requires real EXIF images for full coverage |
 | cmd/imgsearch | 0% | Main function (hard to unit test) |
 
@@ -224,7 +267,6 @@ The following security improvements are recommended for production deployment:
 ## Known Issues / Future Work
 
 - Only indexes JPEG files (extend `IsImageFile()` for PNG/GIF/WebP)
-- No caching of computed hashes (could add SQLite/BoltDB cache)
 - Web UI doesn't persist settings across page reloads
 - No authentication on web UI (bind to localhost only in production)
 - Large directories: consider adding progress during initial scan phase
