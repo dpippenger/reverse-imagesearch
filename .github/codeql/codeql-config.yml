@@ -1,0 +1,17 @@
+name: "ImgSearch CodeQL Config"
+
+queries:
+  - uses: security-and-quality
+
+paths-ignore:
+  - '**/testdata/**'
+  - '**/*_test.go'
+
+# Custom model extensions for security sanitizers
+packs:
+  go:
+    - codeql/go-queries
+
+# Include custom data extensions
+data-extensions:
+  - .github/codeql/go-security-extensions.yml
