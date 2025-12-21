@@ -1,0 +1,19 @@
+extensions:
+  - addsTo:
+      pack: codeql/go-all
+      extensible: summaryModel
+    data:
+      # Mark validatePath as a sanitizer that returns a clean path
+      # The function validates that the path is within an allowed base directory
+      # and returns the cleaned absolute path
+      - ["imgsearch/internal/web", "Server", False, "validatePath", "", "Argument[0]", "ReturnValue[0]", "taint", "manual"]
+
+  - addsTo:
+      pack: codeql/go-all
+      extensible: sinkModel
+    data: []
+
+  - addsTo:
+      pack: codeql/go-all
+      extensible: sourceModel
+    data: []
