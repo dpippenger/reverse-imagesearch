@@ -25,12 +25,13 @@ func main() {
 	outputFile := flag.String("output", "", "Optional file to write results to")
 	webMode := flag.Bool("web", false, "Start web UI instead of CLI")
 	webPort := flag.Int("port", 9183, "Port for web UI")
+	webBind := flag.String("bind", "127.0.0.1", "Bind address for web UI (use 0.0.0.0 for network access)")
 
 	flag.Parse()
 
 	// Web mode
 	if *webMode {
-		server := web.New(*webPort)
+		server := web.NewWithOptions(*webPort, *webBind, "")
 		if err := server.Start(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error starting web server: %v\n", err)
 			os.Exit(1)

@@ -1082,6 +1082,9 @@ func TestNewWithBasePath(t *testing.T) {
 		if server.allowedBasePath != "/custom/path" {
 			t.Errorf("allowedBasePath = %q, want /custom/path", server.allowedBasePath)
 		}
+		if server.bindAddr != "127.0.0.1" {
+			t.Errorf("bindAddr = %q, want 127.0.0.1", server.bindAddr)
+		}
 	})
 
 	t.Run("initializes searches map", func(t *testing.T) {
@@ -1090,6 +1093,42 @@ func TestNewWithBasePath(t *testing.T) {
 			t.Error("searches map should be initialized")
 		}
 	})
+}
+
+func TestNewWithOptions(t *testing.T) {
+	t.Run("creates server with all options", func(t *testing.T) {
+		server := NewWithOptions(8080, "0.0.0.0", "/custom/path")
+		if server.port != 8080 {
+			t.Errorf("port = %d, want 8080", server.port)
+		}
+		if server.bindAddr != "0.0.0.0" {
+			t.Errorf("bindAddr = %q, want 0.0.0.0", server.bindAddr)
+		}
+		if server.allowedBasePath != "/custom/path" {
+			t.Errorf("allowedBasePath = %q, want /custom/path", server.allowedBasePath)
+		}
+	})
+
+	t.Run("defaults to localhost when bindAddr is empty", func(t *testing.T) {
+		server := NewWithOptions(8080, "", "/path")
+		if server.bindAddr != "127.0.0.1" {
+			t.Errorf("bindAddr = %q, want 127.0.0.1", server.bindAddr)
+		}
+	})
+
+	t.Run("initializes searches map", func(t *testing.T) {
+		server := NewWithOptions(8080, "0.0.0.0", "")
+		if server.searches == nil {
+			t.Error("searches map should be initialized")
+		}
+	})
+}
+
+func TestNewDefaultsToLocalhost(t *testing.T) {
+	server := New(8080)
+	if server.bindAddr != "127.0.0.1" {
+		t.Errorf("bindAddr = %q, want 127.0.0.1 (secure default)", server.bindAddr)
+	}
 }
 
 func TestPathTraversalPrevention(t *testing.T) {

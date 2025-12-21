@@ -137,6 +137,7 @@ type ExifData struct {
 | `-verbose` | `false` | Show hash details |
 | `-web` | `false` | Start web UI |
 | `-port` | `9183` | Web UI port |
+| `-bind` | `127.0.0.1` | Bind address (use `0.0.0.0` for network access) |
 
 ## Supported Formats
 
@@ -202,6 +203,7 @@ Note: Individual package coverage is measured by running `go test -cover ./inter
 
 ### Implemented Security Features
 
+- **Localhost Binding by Default**: Server binds to `127.0.0.1` by default; use `-bind 0.0.0.0` to allow network access.
 - **Path Traversal Protection**: All file access endpoints validate paths are within allowed base directory (defaults to user's home directory). Use `NewWithBasePath()` to configure a custom base path.
 - **Header Injection Prevention**: Filenames in Content-Disposition headers are sanitized to prevent HTTP header injection attacks.
 - **Cryptographic Search IDs**: Search IDs use `crypto/rand` for unpredictable 128-bit identifiers.
@@ -214,7 +216,6 @@ The following security improvements are recommended for production deployment:
 | Priority | Issue | Description |
 |----------|-------|-------------|
 | High | HTTPS/TLS | Server runs plain HTTP; configure TLS or use reverse proxy |
-| High | Localhost binding | Bind to `127.0.0.1` instead of all interfaces for local use |
 | Medium | Rate limiting | Add per-IP request limits to prevent DoS attacks |
 | Medium | Request timeouts | Configure `http.Server` timeouts to prevent slowloris |
 | Medium | File signature validation | Validate JPEG magic bytes before processing uploads |

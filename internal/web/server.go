@@ -27,6 +27,7 @@ var content embed.FS
 // Server handles the web UI
 type Server struct {
 	port            int
+	bindAddr        string // Bind address (default "127.0.0.1" for security)
 	searches        map[string]chan search.Result
 	searchesMu      sync.RWMutex
 	allowedBasePath string // Base path for file access (empty = user home)
@@ -108,19 +109,37 @@ type BrowseEntry struct {
 	Path  string `json:"path"`
 }
 
-// New creates a new web server
+// New creates a new web server that binds to localhost only (secure default).
 func New(port int) *Server {
 	return &Server{
 		port:     port,
+		bindAddr: "127.0.0.1",
 		searches: make(map[string]chan search.Result),
+	}
+}
+
+// NewWithOptions creates a new web server with custom configuration.
+// bindAddr: address to bind to ("127.0.0.1" for localhost, "0.0.0.0" for all interfaces)
+// basePath: allowed base path for file access (empty = user home directory)
+func NewWithOptions(port int, bindAddr, basePath string) *Server {
+	if bindAddr == "" {
+		bindAddr = "127.0.0.1"
+	}
+	return &Server{
+		port:            port,
+		bindAddr:        bindAddr,
+		searches:        make(map[string]chan search.Result),
+		allowedBasePath: basePath,
 	}
 }
 
 // NewWithBasePath creates a new web server with a custom allowed base path.
 // This is useful for restricting file access to a specific directory.
+// Binds to localhost only for security.
 func NewWithBasePath(port int, basePath string) *Server {
 	return &Server{
 		port:            port,
+		bindAddr:        "127.0.0.1",
 		searches:        make(map[string]chan search.Result),
 		allowedBasePath: basePath,
 	}
@@ -137,8 +156,13 @@ func (s *Server) Start() error {
 	http.HandleFunc("/api/exif", s.handleExif)
 	http.HandleFunc("/api/download", s.handleDownload)
 
-	addr := fmt.Sprintf(":%d", s.port)
-	fmt.Printf("Starting web server at http://localhost%s\n", addr)
+	addr := fmt.Sprintf("%s:%d", s.bindAddr, s.port)
+	if s.bindAddr == "0.0.0.0" {
+		fmt.Printf("Starting web server at http://0.0.0.0:%d (accessible from network)\n", s.port)
+		fmt.Println("WARNING: Server is accessible from the network. Ensure proper firewall rules.")
+	} else {
+		fmt.Printf("Starting web server at http://%s\n", addr)
+	}
 	return http.ListenAndServe(addr, nil)
 }
 
