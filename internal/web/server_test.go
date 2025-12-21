@@ -101,7 +101,8 @@ func TestHandleAppJS(t *testing.T) {
 }
 
 func TestHandleBrowse(t *testing.T) {
-	server := New(8080)
+	// Use /tmp as base path for tests since temp files are created there
+	server := NewWithBasePath(8080, os.TempDir())
 
 	t.Run("browse with valid directory", func(t *testing.T) {
 		tmpDir, err := os.MkdirTemp("", "browse-test-*")
@@ -254,7 +255,8 @@ func TestHandleBrowse(t *testing.T) {
 }
 
 func TestHandleExif(t *testing.T) {
-	server := New(8080)
+	// Use /tmp as base path for tests since temp files are created there
+	server := NewWithBasePath(8080, os.TempDir())
 
 	t.Run("exif with valid image", func(t *testing.T) {
 		img := testutil.SolidColorImage(100, 50, color.White)
@@ -304,7 +306,8 @@ func TestHandleExif(t *testing.T) {
 }
 
 func TestHandleThumbnail(t *testing.T) {
-	server := New(8080)
+	// Use /tmp as base path for tests since temp files are created there
+	server := NewWithBasePath(8080, os.TempDir())
 
 	t.Run("thumbnail with valid image", func(t *testing.T) {
 		img := testutil.SolidColorImage(200, 200, color.RGBA{0, 0, 255, 255})
@@ -349,7 +352,9 @@ func TestHandleThumbnail(t *testing.T) {
 	})
 
 	t.Run("thumbnail with non-existent file", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/api/thumbnail?path=/nonexistent/image.jpg", nil)
+		// Use a path within allowed directory that doesn't exist
+		nonExistentPath := os.TempDir() + "/nonexistent-image-12345.jpg"
+		req := httptest.NewRequest("GET", "/api/thumbnail?path="+nonExistentPath, nil)
 		w := httptest.NewRecorder()
 
 		server.handleThumbnail(w, req)
@@ -362,7 +367,8 @@ func TestHandleThumbnail(t *testing.T) {
 }
 
 func TestHandleDownload(t *testing.T) {
-	server := New(8080)
+	// Use /tmp as base path for tests since temp files are created there
+	server := NewWithBasePath(8080, os.TempDir())
 
 	t.Run("download with valid image", func(t *testing.T) {
 		img := testutil.SolidColorImage(100, 100, color.White)
@@ -431,8 +437,9 @@ func TestHandleDownload(t *testing.T) {
 	})
 
 	t.Run("download with non-existent file", func(t *testing.T) {
-		// First create a valid-looking path that would pass IsImageFile
-		req := httptest.NewRequest("GET", "/api/download?path=/nonexistent/image.jpg", nil)
+		// Use a path within allowed directory that doesn't exist
+		nonExistentPath := os.TempDir() + "/nonexistent-image-12345.jpg"
+		req := httptest.NewRequest("GET", "/api/download?path="+nonExistentPath, nil)
 		w := httptest.NewRecorder()
 
 		server.handleDownload(w, req)
@@ -445,7 +452,8 @@ func TestHandleDownload(t *testing.T) {
 }
 
 func TestHandleSearch(t *testing.T) {
-	server := New(8080)
+	// Use /tmp as base path for tests since temp files are created there
+	server := NewWithBasePath(8080, os.TempDir())
 
 	t.Run("search with GET returns 405", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/search", nil)
@@ -584,7 +592,7 @@ func TestHandleSearch(t *testing.T) {
 		}
 	})
 
-	t.Run("search with default directory", func(t *testing.T) {
+	t.Run("search with default directory returns error when outside allowed path", func(t *testing.T) {
 		img := testutil.SolidColorImage(64, 64, color.RGBA{255, 0, 0, 255})
 		jpegBytes := testutil.EncodeJPEG(img)
 
@@ -594,7 +602,7 @@ func TestHandleSearch(t *testing.T) {
 		part, _ := writer.CreateFormFile("image", "test.jpg")
 		part.Write(jpegBytes)
 
-		// Don't set dir - should default to "."
+		// Don't set dir - should default to "." which is outside allowed path
 		writer.Close()
 
 		req := httptest.NewRequest("POST", "/api/search", &buf)
@@ -606,8 +614,9 @@ func TestHandleSearch(t *testing.T) {
 		var result map[string]string
 		json.NewDecoder(w.Body).Decode(&result)
 
-		if result["searchId"] == "" {
-			t.Error("Expected searchId in response")
+		// Should get access denied error since "." is outside /tmp
+		if result["error"] == "" {
+			t.Error("Expected error for path outside allowed directory")
 		}
 	})
 }
@@ -758,7 +767,8 @@ func TestBrowseEntry(t *testing.T) {
 }
 
 func TestHandleBrowseSorting(t *testing.T) {
-	server := New(8080)
+	// Use /tmp as base path for tests since temp files are created there
+	server := NewWithBasePath(8080, os.TempDir())
 
 	t.Run("browse sorts directories before files", func(t *testing.T) {
 		tmpDir, err := os.MkdirTemp("", "browse-sort-*")
@@ -843,7 +853,8 @@ func TestHandleBrowseSorting(t *testing.T) {
 }
 
 func TestHandleSearchEdgeCases(t *testing.T) {
-	server := New(8080)
+	// Use /tmp as base path for tests since temp files are created there
+	server := NewWithBasePath(8080, os.TempDir())
 
 	t.Run("search with invalid multipart form", func(t *testing.T) {
 		// Send a POST with invalid content type
@@ -893,7 +904,8 @@ func TestHandleSearchEdgeCases(t *testing.T) {
 }
 
 func TestHandleDownloadEdgeCases(t *testing.T) {
-	server := New(8080)
+	// Use /tmp as base path for tests since temp files are created there
+	server := NewWithBasePath(8080, os.TempDir())
 
 	t.Run("download with unreadable file returns error", func(t *testing.T) {
 		img := testutil.SolidColorImage(100, 100, color.White)
@@ -921,7 +933,8 @@ func TestHandleDownloadEdgeCases(t *testing.T) {
 }
 
 func TestHandleThumbnailEdgeCases(t *testing.T) {
-	server := New(8080)
+	// Use /tmp as base path for tests since temp files are created there
+	server := NewWithBasePath(8080, os.TempDir())
 
 	t.Run("thumbnail with corrupt JPEG", func(t *testing.T) {
 		tmpFile, err := os.CreateTemp("", "corrupt-*.jpg")
@@ -941,6 +954,226 @@ func TestHandleThumbnailEdgeCases(t *testing.T) {
 		resp := w.Result()
 		if resp.StatusCode != http.StatusInternalServerError {
 			t.Errorf("Status = %d, want 500", resp.StatusCode)
+		}
+	})
+}
+
+// Tests for security helper functions
+func TestIsPathAllowed(t *testing.T) {
+	server := NewWithBasePath(8080, os.TempDir())
+
+	t.Run("allows path within base directory", func(t *testing.T) {
+		tmpDir, err := os.MkdirTemp("", "pathtest-*")
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		if !server.isPathAllowed(tmpDir) {
+			t.Error("Path within base should be allowed")
+		}
+	})
+
+	t.Run("allows nested path within base directory", func(t *testing.T) {
+		tmpDir, err := os.MkdirTemp("", "pathtest-*")
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		nestedPath := tmpDir + "/subdir/deep/path"
+		if !server.isPathAllowed(nestedPath) {
+			t.Error("Nested path within base should be allowed")
+		}
+	})
+
+	t.Run("rejects path outside base directory", func(t *testing.T) {
+		if server.isPathAllowed("/etc/passwd") {
+			t.Error("Path outside base should be rejected")
+		}
+	})
+
+	t.Run("rejects path traversal attempts", func(t *testing.T) {
+		traversalPath := os.TempDir() + "/../etc/passwd"
+		if server.isPathAllowed(traversalPath) {
+			t.Error("Path traversal should be rejected")
+		}
+	})
+
+	t.Run("allows base directory itself", func(t *testing.T) {
+		if !server.isPathAllowed(os.TempDir()) {
+			t.Error("Base directory itself should be allowed")
+		}
+	})
+
+	t.Run("rejects similar prefix outside base", func(t *testing.T) {
+		// If base is /home/user, reject /home/user2
+		// This tests the trailing separator check
+		server := NewWithBasePath(8080, "/home/user")
+		if server.isPathAllowed("/home/user2") {
+			t.Error("Similar prefix path should be rejected")
+		}
+	})
+}
+
+func TestSanitizeFilename(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"normal.jpg", "normal.jpg"},
+		{"file with spaces.jpg", "file with spaces.jpg"},
+		{"file\"with\"quotes.jpg", "file_with_quotes.jpg"},
+		{"file\\with\\backslash.jpg", "file_with_backslash.jpg"},
+		{"file\rwith\nlines.jpg", "file_with_lines.jpg"},
+		{"file\x00null.jpg", "file_null.jpg"},
+		{"normal-file_123.jpeg", "normal-file_123.jpeg"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			result := sanitizeFilename(tc.input)
+			if result != tc.expected {
+				t.Errorf("sanitizeFilename(%q) = %q, want %q", tc.input, result, tc.expected)
+			}
+		})
+	}
+}
+
+func TestGenerateSearchID(t *testing.T) {
+	t.Run("generates non-empty ID", func(t *testing.T) {
+		id := generateSearchID()
+		if id == "" {
+			t.Error("Search ID should not be empty")
+		}
+	})
+
+	t.Run("generates unique IDs", func(t *testing.T) {
+		ids := make(map[string]bool)
+		for i := 0; i < 100; i++ {
+			id := generateSearchID()
+			if ids[id] {
+				t.Errorf("Duplicate ID generated: %s", id)
+			}
+			ids[id] = true
+		}
+	})
+
+	t.Run("generates 32-character hex string", func(t *testing.T) {
+		id := generateSearchID()
+		if len(id) != 32 {
+			t.Errorf("ID length = %d, want 32", len(id))
+		}
+		// Verify it's valid hex
+		for _, c := range id {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				t.Errorf("Invalid hex character in ID: %c", c)
+			}
+		}
+	})
+}
+
+func TestNewWithBasePath(t *testing.T) {
+	t.Run("creates server with custom base path", func(t *testing.T) {
+		server := NewWithBasePath(8080, "/custom/path")
+		if server.port != 8080 {
+			t.Errorf("port = %d, want 8080", server.port)
+		}
+		if server.allowedBasePath != "/custom/path" {
+			t.Errorf("allowedBasePath = %q, want /custom/path", server.allowedBasePath)
+		}
+		if server.bindAddr != "127.0.0.1" {
+			t.Errorf("bindAddr = %q, want 127.0.0.1", server.bindAddr)
+		}
+	})
+
+	t.Run("initializes searches map", func(t *testing.T) {
+		server := NewWithBasePath(8080, "/custom/path")
+		if server.searches == nil {
+			t.Error("searches map should be initialized")
+		}
+	})
+}
+
+func TestNewWithOptions(t *testing.T) {
+	t.Run("creates server with all options", func(t *testing.T) {
+		server := NewWithOptions(8080, "0.0.0.0", "/custom/path")
+		if server.port != 8080 {
+			t.Errorf("port = %d, want 8080", server.port)
+		}
+		if server.bindAddr != "0.0.0.0" {
+			t.Errorf("bindAddr = %q, want 0.0.0.0", server.bindAddr)
+		}
+		if server.allowedBasePath != "/custom/path" {
+			t.Errorf("allowedBasePath = %q, want /custom/path", server.allowedBasePath)
+		}
+	})
+
+	t.Run("defaults to localhost when bindAddr is empty", func(t *testing.T) {
+		server := NewWithOptions(8080, "", "/path")
+		if server.bindAddr != "127.0.0.1" {
+			t.Errorf("bindAddr = %q, want 127.0.0.1", server.bindAddr)
+		}
+	})
+
+	t.Run("initializes searches map", func(t *testing.T) {
+		server := NewWithOptions(8080, "0.0.0.0", "")
+		if server.searches == nil {
+			t.Error("searches map should be initialized")
+		}
+	})
+}
+
+func TestNewDefaultsToLocalhost(t *testing.T) {
+	server := New(8080)
+	if server.bindAddr != "127.0.0.1" {
+		t.Errorf("bindAddr = %q, want 127.0.0.1 (secure default)", server.bindAddr)
+	}
+}
+
+func TestPathTraversalPrevention(t *testing.T) {
+	// Integration test for path traversal prevention across endpoints
+	server := NewWithBasePath(8080, os.TempDir())
+
+	t.Run("thumbnail rejects path traversal", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/thumbnail?path=/etc/passwd", nil)
+		w := httptest.NewRecorder()
+		server.handleThumbnail(w, req)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("Status = %d, want 403", w.Code)
+		}
+	})
+
+	t.Run("download rejects path traversal", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/download?path=/etc/passwd", nil)
+		w := httptest.NewRecorder()
+		server.handleDownload(w, req)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("Status = %d, want 403", w.Code)
+		}
+	})
+
+	t.Run("exif rejects path traversal", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/exif?path=/etc/passwd", nil)
+		w := httptest.NewRecorder()
+		server.handleExif(w, req)
+
+		var result map[string]interface{}
+		json.NewDecoder(w.Body).Decode(&result)
+		if result["error"] != "Access denied" {
+			t.Errorf("error = %v, want 'Access denied'", result["error"])
+		}
+	})
+
+	t.Run("browse rejects path traversal", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/browse?path=/etc", nil)
+		w := httptest.NewRecorder()
+		server.handleBrowse(w, req)
+
+		var result BrowseResponse
+		json.NewDecoder(w.Body).Decode(&result)
+		if result.Error != "Access denied: path outside allowed directory" {
+			t.Errorf("error = %q, want access denied", result.Error)
 		}
 	})
 }

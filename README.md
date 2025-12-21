@@ -39,14 +39,19 @@ go build -o imgsearch .
 Start the web server:
 
 ```bash
-# Default port 9183
+# Default - binds to localhost only (secure)
 ./imgsearch -web
 
 # Custom port
 ./imgsearch -web -port 8080
+
+# Allow network access (bind to all interfaces)
+./imgsearch -web -bind 0.0.0.0
 ```
 
 Then open `http://localhost:9183` in your browser.
+
+**Security Note:** By default, the web server binds to `127.0.0.1` (localhost only) for security. This means it's only accessible from the same machine. To allow access from other computers on your network, use `-bind 0.0.0.0`. Only do this on trusted networks, as there is no authentication.
 
 The web UI provides:
 - Drag-and-drop image upload
@@ -95,6 +100,7 @@ The web UI provides:
 | `-output` | Write sorted results to file | (none) |
 | `-web` | Start web UI instead of CLI | `false` |
 | `-port` | Port for web UI | `9183` |
+| `-bind` | Bind address for web UI | `127.0.0.1` |
 
 ## Supported Formats
 

@@ -137,6 +137,7 @@ type ExifData struct {
 | `-verbose` | `false` | Show hash details |
 | `-web` | `false` | Start web UI |
 | `-port` | `9183` | Web UI port |
+| `-bind` | `127.0.0.1` | Bind address (use `0.0.0.0` for network access) |
 
 ## Supported Formats
 
@@ -197,6 +198,28 @@ Test images are generated programmatically using `internal/testutil`:
 | cmd/imgsearch | 0% | Main function (hard to unit test) |
 
 Note: Individual package coverage is measured by running `go test -cover ./internal/<pkg>/...`. The exif package has lower coverage because EXIF field extraction requires images with embedded EXIF metadata, which cannot be easily generated programmatically.
+
+## Security
+
+### Implemented Security Features
+
+- **Localhost Binding by Default**: Server binds to `127.0.0.1` by default; use `-bind 0.0.0.0` to allow network access.
+- **Path Traversal Protection**: All file access endpoints validate paths are within allowed base directory (defaults to user's home directory). Use `NewWithBasePath()` to configure a custom base path.
+- **Header Injection Prevention**: Filenames in Content-Disposition headers are sanitized to prevent HTTP header injection attacks.
+- **Cryptographic Search IDs**: Search IDs use `crypto/rand` for unpredictable 128-bit identifiers.
+- **Same-Origin SSE**: Removed wildcard CORS header from SSE endpoint; only same-origin requests allowed.
+
+### Security Future Work
+
+The following security improvements are recommended for production deployment:
+
+| Priority | Issue | Description |
+|----------|-------|-------------|
+| High | HTTPS/TLS | Server runs plain HTTP; configure TLS or use reverse proxy |
+| Medium | Rate limiting | Add per-IP request limits to prevent DoS attacks |
+| Medium | Request timeouts | Configure `http.Server` timeouts to prevent slowloris |
+| Medium | File signature validation | Validate JPEG magic bytes before processing uploads |
+| Low | Cache-Control headers | Add appropriate caching headers for sensitive responses |
 
 ## Known Issues / Future Work
 
