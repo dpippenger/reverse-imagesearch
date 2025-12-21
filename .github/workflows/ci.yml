@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+# Explicitly set minimal permissions for security
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test
