@@ -2,6 +2,8 @@
 
 A fast, parallel image similarity search tool using perceptual hashing algorithms. Find visually similar images across large directories.
 
+**[Full Documentation](https://github.com/dpippenger/reverse-imagesearch#readme)** | **[Source Code](https://github.com/dpippenger/reverse-imagesearch)**
+
 ## Quick Start
 
 ```bash
@@ -90,7 +92,3 @@ volumes:
 ## Supported Formats
 
 - JPEG (.jpg, .jpeg)
-
-## Source Code
-
-GitHub: https://github.com/dpippenger/reverse-imagesearch
