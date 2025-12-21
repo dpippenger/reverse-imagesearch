@@ -108,7 +108,7 @@ func main() {
 		}
 	}
 
-	fmt.Println("\n=== Results (as found) ===\n")
+	fmt.Println("\n=== Results (as found) ===")
 
 	// Process images in parallel
 	var wg sync.WaitGroup
@@ -173,7 +173,7 @@ func main() {
 			outputMatches = outputMatches[:*topN]
 		}
 
-		fmt.Fprintln(outFile, "=== Similar Images (sorted by similarity) ===\n")
+		fmt.Fprintln(outFile, "=== Similar Images (sorted by similarity) ===")
 		for i, match := range outputMatches {
 			fmt.Fprintf(outFile, "%d. [%.1f%%] %s\n", i+1, match.Similarity, match.Path)
 			if *verbose {

@@ -1,4 +1,4 @@
-.PHONY: all build clean install test run deps
+.PHONY: all build clean install test test-race coverage run deps
 
 BINARY_NAME=imgsearch
 BUILD_DIR=build
@@ -50,6 +50,16 @@ clean:
 test:
 	$(GO) test -v ./...
 
+# Run tests with race detector
+test-race:
+	$(GO) test -race ./...
+
+# Generate coverage report
+coverage:
+	$(GO) test -coverprofile=coverage.out ./...
+	$(GO) tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report generated: coverage.html"
+
 # Run the application (requires SOURCE and optionally DIR)
 run: build
 	./$(BINARY_NAME) -source $(SOURCE) -dir $(or $(DIR),.)
@@ -64,5 +74,7 @@ help:
 	@echo "  make clean       - Remove build artifacts"
 	@echo "  make deps        - Download dependencies"
 	@echo "  make test        - Run tests"
+	@echo "  make test-race   - Run tests with race detector"
+	@echo "  make coverage    - Generate HTML coverage report"
 	@echo "  make run SOURCE=<image> [DIR=<path>] - Build and run"
 	@echo "  make help        - Show this help"
