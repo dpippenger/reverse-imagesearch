@@ -1,8 +1,0 @@
-extensions:
-  - addsTo:
-      pack: codeql/go-all
-      extensible: neutralModel
-    data:
-      # Mark validatePath return value as neutral (not tainted)
-      # The function validates that paths are within the allowed base directory
-      - ["imgsearch/internal/web", "Server", False, "validatePath", "", "", "ReturnValue[0]", "path-injection", "manual"]
