@@ -485,6 +485,212 @@
 
         .slider-value { min-width: 50px; text-align: right; color: #00d9ff; font-weight: 600; }
         .status-message { text-align: center; padding: 20px; color: #888; font-style: italic; }
+
+        /* Tab Navigation */
+        .tab-nav {
+            display: flex;
+            gap: 0;
+            margin-bottom: 30px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 12px;
+            padding: 4px;
+        }
+
+        .tab-btn {
+            flex: 1;
+            padding: 14px 24px;
+            border: none;
+            background: transparent;
+            color: #888;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .tab-btn:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .tab-btn.active {
+            background: linear-gradient(90deg, rgba(0, 217, 255, 0.2), rgba(0, 255, 136, 0.2));
+            color: #fff;
+        }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* Settings Panel */
+        .settings-panel {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .settings-section {
+            margin-bottom: 30px;
+        }
+
+        .settings-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .settings-section h3 {
+            font-size: 1.1rem;
+            color: #fff;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+        }
+
+        .stat-card {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            background: linear-gradient(90deg, #00d9ff, #00ff88);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .stat-label {
+            font-size: 0.85rem;
+            color: #888;
+            margin-top: 5px;
+        }
+
+        .cache-disabled {
+            text-align: center;
+            padding: 40px;
+            color: #888;
+        }
+
+        .cache-disabled-icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+        }
+
+        .cached-dirs-list {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #333;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        .cached-dirs-empty {
+            padding: 20px;
+            text-align: center;
+            color: #666;
+        }
+
+        .cached-dir-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            border-bottom: 1px solid #333;
+            transition: background 0.2s;
+        }
+
+        .cached-dir-item:last-child {
+            border-bottom: none;
+        }
+
+        .cached-dir-item:hover {
+            background: rgba(0, 217, 255, 0.1);
+        }
+
+        .cached-dir-path {
+            font-family: monospace;
+            font-size: 0.9rem;
+            color: #ccc;
+            word-break: break-all;
+        }
+
+        .cached-dir-count {
+            background: linear-gradient(135deg, #00d9ff, #00ff88);
+            color: #000;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            flex-shrink: 0;
+            margin-left: 10px;
+        }
+
+        .cached-dirs-loading {
+            padding: 20px;
+            text-align: center;
+            color: #888;
+        }
+
+        .scan-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .scan-controls input {
+            flex: 1;
+        }
+
+        .scan-progress {
+            display: none;
+            margin-top: 15px;
+        }
+
+        .scan-progress.active {
+            display: block;
+        }
+
+        .scan-progress-text {
+            color: #888;
+            font-size: 0.9rem;
+            margin-top: 8px;
+        }
+
+        .btn-danger {
+            background: rgba(255, 107, 107, 0.2);
+            color: #ff6b6b;
+            border: 1px solid rgba(255, 107, 107, 0.3);
+        }
+
+        .btn-danger:hover {
+            background: rgba(255, 107, 107, 0.3);
+        }
+
+        .btn-success {
+            background: rgba(0, 255, 136, 0.2);
+            color: #00ff88;
+            border: 1px solid rgba(0, 255, 136, 0.3);
+        }
+
+        .btn-success:hover {
+            background: rgba(0, 255, 136, 0.3);
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+        }
     </style>
 </head>
 <body>
@@ -494,6 +700,12 @@
             <p class="subtitle">Find similar images using perceptual hashing</p>
         </header>
 
+        <div class="tab-nav">
+            <button class="tab-btn active" data-tab="search">Search</button>
+            <button class="tab-btn" data-tab="settings">Settings</button>
+        </div>
+
+        <div id="searchTab" class="tab-content active">
         <div class="config-panel">
             <div class="config-grid">
                 <div class="config-item">
@@ -557,6 +769,81 @@
             <div class="no-results" id="noResults" style="display: none;">
                 <div class="no-results-icon">🔍</div>
                 <p>No similar images found above the threshold</p>
+            </div>
+        </div>
+        </div>
+
+        <div id="settingsTab" class="tab-content">
+            <div class="settings-panel">
+                <div id="cacheEnabled">
+                    <div class="settings-section">
+                        <h3>Cache Statistics</h3>
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-value" id="statEntries">0</div>
+                                <div class="stat-label">Cached Images</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="statHitRate">0%</div>
+                                <div class="stat-label">Hit Rate</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="statSize">0 MB</div>
+                                <div class="stat-label">Cache Size</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value" id="statHits">0</div>
+                                <div class="stat-label">Cache Hits</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Scan Directory to Cache</h3>
+                        <p style="color: #888; margin-bottom: 15px; font-size: 0.9rem;">
+                            Pre-scan a directory to cache image hashes for faster searches.
+                        </p>
+                        <div class="scan-controls">
+                            <input type="text" id="scanDir" placeholder="/path/to/scan" class="config-item">
+                            <button class="btn-browse" id="scanBrowseBtn">Browse</button>
+                            <button class="btn btn-success" id="scanBtn">Scan</button>
+                        </div>
+                        <div class="scan-progress" id="scanProgress">
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" id="scanProgressBar"></div>
+                            </div>
+                            <p class="scan-progress-text" id="scanProgressText">Scanning...</p>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Cached Directories</h3>
+                        <p style="color: #888; margin-bottom: 15px; font-size: 0.9rem;">
+                            Directories with cached image hashes.
+                        </p>
+                        <div id="cachedDirsContainer">
+                            <div class="cached-dirs-loading">Loading...</div>
+                        </div>
+                        <button class="btn btn-secondary" id="refreshDirsBtn" style="margin-top: 10px;">Refresh</button>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3>Cache Management</h3>
+                        <div class="action-buttons">
+                            <button class="btn btn-secondary" id="refreshStatsBtn">Refresh Stats</button>
+                            <button class="btn btn-danger" id="clearCacheBtn">Clear Cache</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="cacheDisabled" class="cache-disabled" style="display: none;">
+                    <div class="cache-disabled-icon">💾</div>
+                    <h3 style="margin-bottom: 10px;">Cache Not Enabled</h3>
+                    <p>Start the server with the <code>-cache-path</code> flag to enable hash caching.</p>
+                    <p style="margin-top: 10px; font-size: 0.85rem;">
+                        Example: <code>imgsearch -web -cache-path ~/.imgsearch/cache.db</code>
+                    </p>
+                </div>
             </div>
         </div>
     </div>

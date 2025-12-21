@@ -371,8 +371,10 @@ const searchDirInput = document.getElementById('searchDir');
 
 let currentBrowsePath = '';
 let selectedPath = '';
+let browserTargetInput = null; // Which input to update when a directory is selected
 
 browseBtn.addEventListener('click', () => {
+    browserTargetInput = searchDirInput;
     openBrowser(searchDirInput.value || '');
 });
 
@@ -402,8 +404,8 @@ modalPathInput.addEventListener('keypress', (e) => {
 });
 
 modalSelectBtn.addEventListener('click', () => {
-    if (selectedPath) {
-        searchDirInput.value = selectedPath;
+    if (selectedPath && browserTargetInput) {
+        browserTargetInput.value = selectedPath;
         closeBrowser();
     }
 });
@@ -506,9 +508,9 @@ function renderDirectory(data) {
             const path = item.dataset.path;
             const isDir = item.dataset.isdir === 'true';
 
-            if (isDir) {
+            if (isDir && browserTargetInput) {
                 selectedPath = path;
-                searchDirInput.value = selectedPath;
+                browserTargetInput.value = selectedPath;
                 closeBrowser();
             }
         });
@@ -521,4 +523,227 @@ document.addEventListener('keydown', (e) => {
             closeBrowser();
         }
     }
+});
+
+// Tab Navigation
+const tabBtns = document.querySelectorAll('.tab-btn');
+const tabContents = document.querySelectorAll('.tab-content');
+
+tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        const tabId = btn.dataset.tab;
+
+        tabBtns.forEach(b => b.classList.remove('active'));
+        tabContents.forEach(c => c.classList.remove('active'));
+
+        btn.classList.add('active');
+        document.getElementById(tabId + 'Tab').classList.add('active');
+
+        if (tabId === 'settings') {
+            loadCacheStats();
+            loadCachedDirectories();
+        }
+    });
+});
+
+// Cache Settings
+const cacheEnabled = document.getElementById('cacheEnabled');
+const cacheDisabled = document.getElementById('cacheDisabled');
+const statEntries = document.getElementById('statEntries');
+const statHitRate = document.getElementById('statHitRate');
+const statSize = document.getElementById('statSize');
+const statHits = document.getElementById('statHits');
+const scanDirInput = document.getElementById('scanDir');
+const scanBrowseBtn = document.getElementById('scanBrowseBtn');
+const scanBtn = document.getElementById('scanBtn');
+const scanProgress = document.getElementById('scanProgress');
+const scanProgressBar = document.getElementById('scanProgressBar');
+const scanProgressText = document.getElementById('scanProgressText');
+const refreshStatsBtn = document.getElementById('refreshStatsBtn');
+const clearCacheBtn = document.getElementById('clearCacheBtn');
+
+function loadCacheStats() {
+    fetch('/api/cache/stats')
+        .then(response => response.json())
+        .then(data => {
+            if (!data.enabled) {
+                cacheEnabled.style.display = 'none';
+                cacheDisabled.style.display = 'block';
+                return;
+            }
+
+            cacheEnabled.style.display = 'block';
+            cacheDisabled.style.display = 'none';
+
+            statEntries.textContent = formatNumber(data.entries);
+            statHitRate.textContent = data.hitRate.toFixed(1) + '%';
+            statSize.textContent = data.sizeMB.toFixed(2) + ' MB';
+            statHits.textContent = formatNumber(data.hits);
+        })
+        .catch(() => {
+            cacheEnabled.style.display = 'none';
+            cacheDisabled.style.display = 'block';
+        });
+}
+
+function formatNumber(n) {
+    if (n >= 1000000) {
+        return (n / 1000000).toFixed(1) + 'M';
+    }
+    if (n >= 1000) {
+        return (n / 1000).toFixed(1) + 'K';
+    }
+    return String(n);
+}
+
+refreshStatsBtn.addEventListener('click', loadCacheStats);
+
+// Cached Directories
+const cachedDirsContainer = document.getElementById('cachedDirsContainer');
+const refreshDirsBtn = document.getElementById('refreshDirsBtn');
+
+function loadCachedDirectories() {
+    cachedDirsContainer.textContent = '';
+    const loading = document.createElement('div');
+    loading.className = 'cached-dirs-loading';
+    loading.textContent = 'Loading...';
+    cachedDirsContainer.appendChild(loading);
+
+    fetch('/api/cache/directories')
+        .then(response => response.json())
+        .then(data => {
+            cachedDirsContainer.textContent = '';
+
+            if (!data.enabled) {
+                const empty = document.createElement('div');
+                empty.className = 'cached-dirs-empty';
+                empty.textContent = 'Cache not enabled';
+                cachedDirsContainer.appendChild(empty);
+                return;
+            }
+
+            if (!data.directories || data.directories.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'cached-dirs-empty';
+                empty.textContent = 'No directories cached yet';
+                cachedDirsContainer.appendChild(empty);
+                return;
+            }
+
+            renderCachedDirectories(data.directories);
+        })
+        .catch(() => {
+            cachedDirsContainer.textContent = '';
+            const empty = document.createElement('div');
+            empty.className = 'cached-dirs-empty';
+            empty.textContent = 'Failed to load directories';
+            cachedDirsContainer.appendChild(empty);
+        });
+}
+
+function renderCachedDirectories(dirs) {
+    const list = document.createElement('div');
+    list.className = 'cached-dirs-list';
+
+    for (const dir of dirs) {
+        const item = document.createElement('div');
+        item.className = 'cached-dir-item';
+
+        const path = document.createElement('span');
+        path.className = 'cached-dir-path';
+        path.textContent = dir.path;
+
+        const count = document.createElement('span');
+        count.className = 'cached-dir-count';
+        count.textContent = dir.count + ' image' + (dir.count !== 1 ? 's' : '');
+
+        item.appendChild(path);
+        item.appendChild(count);
+        list.appendChild(item);
+    }
+
+    cachedDirsContainer.textContent = '';
+    cachedDirsContainer.appendChild(list);
+}
+
+refreshDirsBtn.addEventListener('click', loadCachedDirectories);
+
+clearCacheBtn.addEventListener('click', () => {
+    if (!confirm('Are you sure you want to clear all cached hashes?')) {
+        return;
+    }
+
+    clearCacheBtn.disabled = true;
+    clearCacheBtn.textContent = 'Clearing...';
+
+    fetch('/api/cache/clear', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                loadCacheStats();
+                loadCachedDirectories();
+            } else {
+                alert('Failed to clear cache: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch(err => {
+            alert('Failed to clear cache: ' + err.message);
+        })
+        .finally(() => {
+            clearCacheBtn.disabled = false;
+            clearCacheBtn.textContent = 'Clear Cache';
+        });
+});
+
+scanBrowseBtn.addEventListener('click', () => {
+    browserTargetInput = scanDirInput;
+    openBrowser(scanDirInput.value || '');
+});
+
+let scanEventSource = null;
+
+scanBtn.addEventListener('click', () => {
+    const dir = scanDirInput.value.trim();
+    if (!dir) {
+        alert('Please enter a directory to scan');
+        return;
+    }
+
+    scanBtn.disabled = true;
+    scanProgress.classList.add('active');
+    scanProgressBar.style.width = '0%';
+    scanProgressText.textContent = 'Starting scan...';
+
+    scanEventSource = new EventSource('/api/cache/scan?dir=' + encodeURIComponent(dir));
+
+    scanEventSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.error) {
+            scanProgressText.textContent = 'Error: ' + data.error;
+            scanEventSource.close();
+            scanBtn.disabled = false;
+            return;
+        }
+
+        if (data.total > 0) {
+            const percent = Math.round((data.scanned / data.total) * 100);
+            scanProgressBar.style.width = percent + '%';
+            scanProgressText.textContent = 'Scanned ' + data.scanned + ' of ' + data.total + ' images (' + data.cached + ' cached)';
+        }
+
+        if (data.done) {
+            scanEventSource.close();
+            scanBtn.disabled = false;
+            scanProgressText.textContent = 'Scan complete! ' + data.cached + ' images cached.';
+            loadCacheStats();
+            loadCachedDirectories();
+        }
+    };
+
+    scanEventSource.onerror = () => {
+        scanEventSource.close();
+        scanBtn.disabled = false;
+        scanProgressText.textContent = 'Scan error or interrupted';
+    };
 });

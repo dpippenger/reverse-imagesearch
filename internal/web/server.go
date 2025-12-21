@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"imgsearch/internal/cache"
 	"imgsearch/internal/exif"
 	"imgsearch/internal/hash"
 	"imgsearch/internal/imgutil"
@@ -30,7 +31,8 @@ type Server struct {
 	bindAddr        string // Bind address (default "127.0.0.1" for security)
 	searches        map[string]chan search.Result
 	searchesMu      sync.RWMutex
-	allowedBasePath string // Base path for file access (empty = user home)
+	allowedBasePath string           // Base path for file access (empty = user home)
+	cache           *cache.BoltCache // Optional hash cache
 }
 
 // validatePath checks if a path is within the allowed base directory and returns
@@ -163,6 +165,45 @@ func NewWithBasePath(port int, basePath string) *Server {
 	}
 }
 
+// NewWithCache creates a new web server with cache support.
+// cachePath: path to the BoltDB cache file (if empty, caching is disabled)
+func NewWithCache(port int, bindAddr, basePath, cachePath string) (*Server, error) {
+	if bindAddr == "" {
+		bindAddr = "127.0.0.1"
+	}
+
+	s := &Server{
+		port:            port,
+		bindAddr:        bindAddr,
+		searches:        make(map[string]chan search.Result),
+		allowedBasePath: basePath,
+	}
+
+	if cachePath != "" {
+		c, err := cache.New(cachePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open cache: %w", err)
+		}
+		s.cache = c
+	}
+
+	return s, nil
+}
+
+// SetCache sets the cache for the server.
+// This allows setting the cache after server creation.
+func (s *Server) SetCache(c *cache.BoltCache) {
+	s.cache = c
+}
+
+// Close closes any resources held by the server.
+func (s *Server) Close() error {
+	if s.cache != nil {
+		return s.cache.Close()
+	}
+	return nil
+}
+
 // Start starts the web server
 func (s *Server) Start() error {
 	http.HandleFunc("/", s.handleIndex)
@@ -173,6 +214,10 @@ func (s *Server) Start() error {
 	http.HandleFunc("/api/browse", s.handleBrowse)
 	http.HandleFunc("/api/exif", s.handleExif)
 	http.HandleFunc("/api/download", s.handleDownload)
+	http.HandleFunc("/api/cache/stats", s.handleCacheStats)
+	http.HandleFunc("/api/cache/scan", s.handleCacheScan)
+	http.HandleFunc("/api/cache/clear", s.handleCacheClear)
+	http.HandleFunc("/api/cache/directories", s.handleCacheDirectories)
 
 	addr := fmt.Sprintf("%s:%d", s.bindAddr, s.port)
 	if s.bindAddr == "0.0.0.0" {
@@ -270,6 +315,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Threshold: threshold,
 		Workers:   workers,
 		TopN:      topN,
+		Cache:     s.cache,
 	}
 
 	// Generate cryptographically random search ID
@@ -515,4 +561,142 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 // RunSearch is a helper to run searches (used by search package)
 func RunSearch(sourceData hash.Data, config search.Config, callback func(search.Result)) {
 	search.Run(sourceData, config, callback)
+}
+
+// CacheStatsResponse holds cache statistics for the API
+type CacheStatsResponse struct {
+	Enabled   bool    `json:"enabled"`
+	Hits      int64   `json:"hits"`
+	Misses    int64   `json:"misses"`
+	HitRate   float64 `json:"hitRate"`
+	Entries   int64   `json:"entries"`
+	SizeBytes int64   `json:"sizeBytes"`
+	SizeMB    float64 `json:"sizeMB"`
+}
+
+func (s *Server) handleCacheStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if s.cache == nil {
+		json.NewEncoder(w).Encode(CacheStatsResponse{Enabled: false})
+		return
+	}
+
+	stats := s.cache.Stats()
+	total := stats.Hits + stats.Misses
+	hitRate := 0.0
+	if total > 0 {
+		hitRate = float64(stats.Hits) / float64(total) * 100
+	}
+
+	json.NewEncoder(w).Encode(CacheStatsResponse{
+		Enabled:   true,
+		Hits:      stats.Hits,
+		Misses:    stats.Misses,
+		HitRate:   hitRate,
+		Entries:   stats.Entries,
+		SizeBytes: stats.SizeBytes,
+		SizeMB:    float64(stats.SizeBytes) / (1024 * 1024),
+	})
+}
+
+func (s *Server) handleCacheScan(w http.ResponseWriter, r *http.Request) {
+	// Accept both GET and POST for SSE compatibility (EventSource uses GET)
+	if r.Method != "POST" && r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.cache == nil {
+		http.Error(w, "Cache not enabled", http.StatusBadRequest)
+		return
+	}
+
+	dir := r.URL.Query().Get("dir")
+	if dir == "" {
+		http.Error(w, "Directory required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate path
+	validatedDir, ok := s.validatePath(dir)
+	if !ok {
+		http.Error(w, "Access denied: path outside allowed directory", http.StatusForbidden)
+		return
+	}
+	cleanDir := filepath.Clean(validatedDir)
+
+	// Set headers for SSE
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// Run scan and stream progress
+	err := s.cache.Scan(cleanDir, func(progress cache.ScanProgress) {
+		data, _ := json.Marshal(progress)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	})
+
+	if err != nil {
+		errData, _ := json.Marshal(cache.ScanProgress{Error: err.Error(), Done: true})
+		fmt.Fprintf(w, "data: %s\n\n", errData)
+		flusher.Flush()
+	}
+}
+
+func (s *Server) handleCacheClear(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.cache == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Cache not enabled",
+		})
+		return
+	}
+
+	if err := s.cache.Clear(); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+	})
+}
+
+// CacheDirectoriesResponse holds the list of cached directories
+type CacheDirectoriesResponse struct {
+	Enabled     bool                  `json:"enabled"`
+	Directories []cache.DirectoryInfo `json:"directories"`
+}
+
+func (s *Server) handleCacheDirectories(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if s.cache == nil {
+		json.NewEncoder(w).Encode(CacheDirectoriesResponse{Enabled: false})
+		return
+	}
+
+	dirs := s.cache.ListDirectories()
+	json.NewEncoder(w).Encode(CacheDirectoriesResponse{
+		Enabled:     true,
+		Directories: dirs,
+	})
 }

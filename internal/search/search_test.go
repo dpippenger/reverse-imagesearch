@@ -3,10 +3,12 @@ package search
 import (
 	"image/color"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"testing"
 
+	"imgsearch/internal/cache"
 	"imgsearch/internal/hash"
 	"imgsearch/internal/imgutil"
 	"imgsearch/internal/testutil"
@@ -261,6 +263,85 @@ func TestRun(t *testing.T) {
 		// Should have scanned 2 images
 		if finalScanned != 2 {
 			t.Errorf("Expected Scanned=2, got %d", finalScanned)
+		}
+	})
+
+	t.Run("uses cache when provided", func(t *testing.T) {
+		tmpDir, cleanup, err := testutil.CreateTempDirWithSubdirs()
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer cleanup()
+
+		// Create cache
+		cacheDir := t.TempDir()
+		c, err := cache.New(filepath.Join(cacheDir, "cache.db"))
+		if err != nil {
+			t.Fatalf("Failed to create cache: %v", err)
+		}
+		defer c.Close()
+
+		sourceImg := testutil.SolidColorImage(32, 32, color.RGBA{255, 0, 0, 255})
+		sourcePath, _ := testutil.CreateTempJPEG(sourceImg)
+		defer os.Remove(sourcePath)
+
+		sourceData := imgutil.LoadAndHash(sourcePath)
+
+		config := Config{
+			SearchDir: tmpDir,
+			Threshold: 0.0,
+			Workers:   1,
+			Cache:     c,
+		}
+
+		// First run - should populate cache
+		Run(sourceData, config, func(r Result) {})
+
+		// Verify cache was populated
+		stats := c.Stats()
+		if stats.Entries == 0 {
+			t.Error("Expected cache entries after first run")
+		}
+
+		// Second run - should use cache hits
+		Run(sourceData, config, func(r Result) {})
+
+		// Verify cache hits occurred
+		stats = c.Stats()
+		if stats.Hits == 0 {
+			t.Error("Expected cache hits on second run")
+		}
+	})
+
+	t.Run("nil cache works", func(t *testing.T) {
+		tmpDir, cleanup, err := testutil.CreateTempDirWithSubdirs()
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer cleanup()
+
+		sourceImg := testutil.SolidColorImage(32, 32, color.RGBA{255, 0, 0, 255})
+		sourcePath, _ := testutil.CreateTempJPEG(sourceImg)
+		defer os.Remove(sourcePath)
+
+		sourceData := imgutil.LoadAndHash(sourcePath)
+
+		config := Config{
+			SearchDir: tmpDir,
+			Threshold: 0.0,
+			Workers:   1,
+			Cache:     nil, // Explicitly nil cache
+		}
+
+		var doneReceived bool
+		Run(sourceData, config, func(r Result) {
+			if r.Done {
+				doneReceived = true
+			}
+		})
+
+		if !doneReceived {
+			t.Error("Expected Done result with nil cache")
 		}
 	})
 }
