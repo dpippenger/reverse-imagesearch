@@ -1,0 +1,9 @@
+.git/
+.github/
+build/
+*.out
+coverage.html
+*.db
+*.exe
+imgsearch
+.claude/
