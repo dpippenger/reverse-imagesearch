@@ -6,7 +6,8 @@ A fast, parallel image similarity search tool using perceptual hashing algorithm
 
 ```bash
 # Build
-go build -o imgsearch .
+make build
+# or: go build -ldflags="-s -w" -o imgsearch ./cmd/imgsearch
 
 # CLI mode
 ./imgsearch -source <image> -dir <search_directory> [-threshold 70] [-workers 0] [-top 10] [-output results.txt]
@@ -19,26 +20,34 @@ go build -o imgsearch .
 
 ### Core Components
 
-**Hashing Algorithms** (lines 31-195)
-- `PerceptualHash()` - DCT-based perceptual hash (pHash), most reliable for scaled/modified images
-- `AverageHash()` - Simple average-based hash (aHash), fast but less robust
-- `DifferenceHash()` - Gradient-based hash (dHash), resistant to scaling
-- `ComputeColorHistogram()` - 16-bin RGB histogram for color comparison
+**Hashing Algorithms** (`internal/hash`)
+- `hash.Perceptual()` - DCT-based perceptual hash (pHash), most reliable for scaled/modified images
+- `hash.Average()` - Simple average-based hash (aHash), fast but less robust
+- `hash.Difference()` - Gradient-based hash (dHash), resistant to scaling
+- `hash.ComputeColorHistogram()` - 16-bin RGB histogram for color comparison
+- `hash.HammingDistance()` - Count differing bits between two hashes
+- `hash.Similarity()` - Convert hamming distance to 0-100% similarity
+- `hash.HistogramSimilarity()` - Compare two histograms using correlation
 
-**Similarity Calculation** (lines 315-325)
-- Weighted combination: 35% pHash + 25% dHash + 20% aHash + 20% histogram
+**Similarity Calculation** (`internal/imgutil`)
+- `imgutil.ComputeSimilarity()` - Weighted combination: 35% pHash + 25% dHash + 20% aHash + 20% histogram
 - Returns 0-100% similarity score
 - Threshold default: 70%
 
-**Image Processing**
-- `LoadAndHashImage()` - Load from file path and compute all hashes
-- `LoadAndHashImageFromReader()` - Load from io.Reader (for uploads)
-- `GenerateThumbnail()` - Create base64 JPEG thumbnails for web UI
-- `ExtractExifData()` - Extract EXIF metadata from image files
+**Image Processing** (`internal/imgutil`)
+- `imgutil.LoadAndHash()` - Load from file path and compute all hashes
+- `imgutil.LoadAndHashFromReader()` - Load from io.Reader (for uploads)
+- `imgutil.GenerateThumbnail()` - Create base64 JPEG thumbnails for web UI
+- `imgutil.IsImageFile()` - Check if a file is a supported image format
+- `imgutil.FindImages()` - Recursively find all image files in a directory
+- `imgutil.Grayscale()` - Convert image to grayscale
+
+**EXIF Extraction** (`internal/exif`)
+- `exif.Extract()` - Extract EXIF metadata from image files
 
 ### Hash Caching (`internal/cache`)
 
-BoltDB-based persistent cache for computed image hashes. Eliminates redundant O(n⁴) DCT computations on repeated searches.
+BoltDB-based persistent cache for computed image hashes. Eliminates redundant O(n^4) DCT computations on repeated searches.
 
 **Key Features:**
 - Hashes keyed by `path\x00mtime_nanoseconds` (auto-invalidates on file modification)
@@ -46,7 +55,7 @@ BoltDB-based persistent cache for computed image hashes. Eliminates redundant O(
 - Persistent across sessions in single `.db` file
 - 10-100x speedup for repeated searches
 
-**Interface:**
+**Interface (`cache.Cache`):**
 - `Get(path, mtime)` - Retrieve cached hash data
 - `Put(path, mtime, data)` - Store hash data
 - `Clear()` - Remove all cached entries
@@ -54,18 +63,38 @@ BoltDB-based persistent cache for computed image hashes. Eliminates redundant O(
 - `Scan(dir, callback)` - Pre-populate cache for directory (SSE progress)
 - `Close()` - Close database connection
 
-### Web Server (lines 506-1435)
+**Additional Functions:**
+- `cache.DefaultPath()` - Returns default cache path (`~/.imgsearch/cache.db`)
+- `cache.New(dbPath)` - Create a new BoltCache at the specified path
+- `(*BoltCache).ListDirectories()` - List directories with cached entry counts
+
+### Search Engine (`internal/search`)
+
+- `search.Run()` - Performs parallel image search with callback for each result
+- Uses configurable worker pool (defaults to `runtime.NumCPU()`)
+- Integrates with cache for faster repeated searches
+
+### Web Server (`internal/web`)
+
+**Constructors:**
+- `web.New(port)` - Create server bound to localhost
+- `web.NewWithOptions(port, bindAddr, basePath)` - Create with custom bind address and base path
+- `web.NewWithBasePath(port, basePath)` - Create with custom base path (localhost only)
+- `web.NewWithCache(port, bindAddr, basePath, cachePath)` - Create with cache support
 
 **Endpoints:**
-- `GET /` - Serves embedded HTML/CSS/JS UI
+- `GET /` - Serves embedded HTML UI
+- `GET /app.js` - Serves embedded JavaScript
 - `POST /api/search` - Upload image, returns searchId
 - `GET /api/results/{searchId}` - SSE stream of results
 - `GET /api/thumbnail?path=` - Generate thumbnail for a path
 - `GET /api/browse?path=` - Browse filesystem directories (returns JSON with path, parent, entries)
-- `GET /api/exif?path=` - Get EXIF metadata for an image (returns JSON with camera, date, dimensions, etc.)
+- `GET /api/exif?path=` - Get EXIF metadata for an image
+- `GET /api/download?path=` - Stream image as attachment with sanitized filename
 - `GET /api/cache/stats` - Return cache statistics (entries, hits, misses, size)
-- `GET/POST /api/cache/scan?path=` - Pre-populate cache for directory (SSE progress stream)
+- `GET/POST /api/cache/scan?dir=` - Pre-populate cache for directory (SSE progress stream)
 - `POST /api/cache/clear` - Clear all cached entries
+- `GET /api/cache/directories` - List cached directories with image counts
 
 **Streaming:**
 - Uses Server-Sent Events (SSE) for real-time results
@@ -81,7 +110,7 @@ BoltDB-based persistent cache for computed image hashes. Eliminates redundant O(
 - Info button (i) on each result shows EXIF metadata on hover (lazy-loaded)
 - Settings tab with cache management (stats, scan, clear)
 
-### CLI Mode (lines 1463-1609)
+### CLI Mode (`cmd/imgsearch`)
 
 - Streams results to stdout as found (unsorted)
 - Optional `-output` writes sorted results to file
@@ -90,13 +119,15 @@ BoltDB-based persistent cache for computed image hashes. Eliminates redundant O(
 ## Key Data Structures
 
 ```go
-type ImageMatch struct {
+// internal/imgutil
+type Match struct {
     Path       string  // File path
     Similarity float64 // 0-100%
     Hash       uint64  // pHash value
 }
 
-type ImageData struct {
+// internal/hash
+type Data struct {
     Path      string
     PHash     uint64
     AHash     uint64
@@ -105,7 +136,8 @@ type ImageData struct {
     Error     error
 }
 
-type SearchConfig struct {
+// internal/search
+type Config struct {
     SearchDir  string
     Threshold  float64
     Workers    int
@@ -115,13 +147,25 @@ type SearchConfig struct {
     Cache      cache.Cache // Optional hash cache
 }
 
-type CacheStats struct {
+// internal/search
+type Result struct {
+    Match     imgutil.Match
+    Thumbnail string
+    Total     int
+    Scanned   int
+    Done      bool
+    Error     string
+}
+
+// internal/cache
+type Stats struct {
     Hits      int64 // Cache hit count
     Misses    int64 // Cache miss count
     Entries   int64 // Number of cached entries
     SizeBytes int64 // Cache file size in bytes
 }
 
+// internal/cache
 type ScanProgress struct {
     Scanned int    // Images scanned so far
     Total   int    // Total images to scan
@@ -130,6 +174,13 @@ type ScanProgress struct {
     Error   string // Error message if any
 }
 
+// internal/cache
+type DirectoryInfo struct {
+    Path  string // Directory path (truncated to 4 levels)
+    Count int    // Number of cached images
+}
+
+// internal/web
 type BrowseResponse struct {
     Path    string        // Current directory absolute path
     Parent  string        // Parent directory path (empty if at root)
@@ -137,18 +188,21 @@ type BrowseResponse struct {
     Error   string        // Error message if any
 }
 
+// internal/web
 type BrowseEntry struct {
     Name  string // File/directory name
     IsDir bool   // True if directory
     Path  string // Full absolute path
 }
 
-type ExifData struct {
+// internal/exif
+type Data struct {
     Make         string // Camera manufacturer
     Model        string // Camera model
     DateTime     string // Date/time taken
     Width        int    // Image width in pixels
     Height       int    // Image height in pixels
+    FileSize     int64  // File size in bytes
     Orientation  string // Image orientation
     FNumber      string // Aperture (e.g., "f/2.8")
     ExposureTime string // Shutter speed (e.g., "1/125 s")
@@ -181,9 +235,9 @@ type ExifData struct {
 
 ## Supported Formats
 
-Currently only JPEG files (`.jpg`, `.jpeg`) are indexed. To add formats, modify `IsImageFile()` at line 328.
+Currently only JPEG files (`.jpg`, `.jpeg`) are indexed. To add formats, modify `imgutil.IsImageFile()` in `internal/imgutil/imgutil.go`.
 
-The image decoder supports JPEG, PNG, and GIF via blank imports, but `IsImageFile()` filters the search.
+The image decoder supports JPEG, PNG, and GIF via blank imports, but `imgutil.IsImageFile()` filters the search.
 
 ## Dependencies
 
@@ -247,7 +301,7 @@ Note: Individual package coverage is measured by running `go test -cover ./inter
 ### Implemented Security Features
 
 - **Localhost Binding by Default**: Server binds to `127.0.0.1` by default; use `-bind 0.0.0.0` to allow network access.
-- **Path Traversal Protection**: All file access endpoints validate paths are within allowed base directory (defaults to user's home directory). Use `NewWithBasePath()` to configure a custom base path.
+- **Path Traversal Protection**: All file access endpoints validate paths are within allowed base directory (defaults to user's home directory). Use `web.NewWithBasePath()` to configure a custom base path.
 - **Header Injection Prevention**: Filenames in Content-Disposition headers are sanitized to prevent HTTP header injection attacks.
 - **Cryptographic Search IDs**: Search IDs use `crypto/rand` for unpredictable 128-bit identifiers.
 - **Same-Origin SSE**: Removed wildcard CORS header from SSE endpoint; only same-origin requests allowed.
@@ -266,6 +320,6 @@ The following security improvements are recommended for production deployment:
 
 ## Known Issues / Future Work
 
-- Only indexes JPEG files (extend `IsImageFile()` for PNG/GIF/WebP)
+- Only indexes JPEG files (extend `imgutil.IsImageFile()` for PNG/GIF/WebP)
 - No authentication on web UI (bind to localhost only in production)
 - Large directories: consider adding progress during initial scan phase

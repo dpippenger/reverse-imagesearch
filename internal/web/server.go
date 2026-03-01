@@ -17,7 +17,6 @@ import (
 
 	"imgsearch/internal/cache"
 	"imgsearch/internal/exif"
-	"imgsearch/internal/hash"
 	"imgsearch/internal/imgutil"
 	"imgsearch/internal/search"
 )
@@ -79,13 +78,6 @@ func (s *Server) validatePath(requestedPath string) (string, bool) {
 	}
 
 	return absPath, true
-}
-
-// isPathAllowed checks if a path is within the allowed base directory.
-// Deprecated: Use validatePath instead which returns the cleaned path.
-func (s *Server) isPathAllowed(requestedPath string) bool {
-	_, ok := s.validatePath(requestedPath)
-	return ok
 }
 
 // sanitizeFilename removes potentially dangerous characters from a filename
@@ -556,11 +548,6 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	// Stream the file
 	io.Copy(w, file)
-}
-
-// RunSearch is a helper to run searches (used by search package)
-func RunSearch(sourceData hash.Data, config search.Config, callback func(search.Result)) {
-	search.Run(sourceData, config, callback)
 }
 
 // CacheStatsResponse holds cache statistics for the API
