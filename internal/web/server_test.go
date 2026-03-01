@@ -688,7 +688,6 @@ func TestHandleResults(t *testing.T) {
 	})
 }
 
-
 // Test data types
 func TestBrowseResponse(t *testing.T) {
 	resp := BrowseResponse{
