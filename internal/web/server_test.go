@@ -688,38 +688,6 @@ func TestHandleResults(t *testing.T) {
 	})
 }
 
-func TestRunSearch(t *testing.T) {
-	t.Run("RunSearch calls search.Run", func(t *testing.T) {
-		sourceData := hash.Data{
-			PHash: 0xFFFF,
-			AHash: 0xAAAA,
-			DHash: 0x5555,
-		}
-
-		tmpDir, err := os.MkdirTemp("", "runsearch-test-*")
-		if err != nil {
-			t.Fatalf("Failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tmpDir)
-
-		config := search.Config{
-			SearchDir: tmpDir,
-			Threshold: 50.0,
-			Workers:   1,
-		}
-
-		var gotDone bool
-		RunSearch(sourceData, config, func(r search.Result) {
-			if r.Done {
-				gotDone = true
-			}
-		})
-
-		if !gotDone {
-			t.Error("Expected Done result from RunSearch")
-		}
-	})
-}
 
 // Test data types
 func TestBrowseResponse(t *testing.T) {
@@ -963,7 +931,7 @@ func TestHandleThumbnailEdgeCases(t *testing.T) {
 }
 
 // Tests for security helper functions
-func TestIsPathAllowed(t *testing.T) {
+func TestValidatePath(t *testing.T) {
 	server := NewWithBasePath(8080, os.TempDir())
 
 	t.Run("allows path within base directory", func(t *testing.T) {
@@ -973,7 +941,7 @@ func TestIsPathAllowed(t *testing.T) {
 		}
 		defer os.RemoveAll(tmpDir)
 
-		if !server.isPathAllowed(tmpDir) {
+		if _, ok := server.validatePath(tmpDir); !ok {
 			t.Error("Path within base should be allowed")
 		}
 	})
@@ -986,26 +954,26 @@ func TestIsPathAllowed(t *testing.T) {
 		defer os.RemoveAll(tmpDir)
 
 		nestedPath := tmpDir + "/subdir/deep/path"
-		if !server.isPathAllowed(nestedPath) {
+		if _, ok := server.validatePath(nestedPath); !ok {
 			t.Error("Nested path within base should be allowed")
 		}
 	})
 
 	t.Run("rejects path outside base directory", func(t *testing.T) {
-		if server.isPathAllowed("/etc/passwd") {
+		if _, ok := server.validatePath("/etc/passwd"); ok {
 			t.Error("Path outside base should be rejected")
 		}
 	})
 
 	t.Run("rejects path traversal attempts", func(t *testing.T) {
 		traversalPath := os.TempDir() + "/../etc/passwd"
-		if server.isPathAllowed(traversalPath) {
+		if _, ok := server.validatePath(traversalPath); ok {
 			t.Error("Path traversal should be rejected")
 		}
 	})
 
 	t.Run("allows base directory itself", func(t *testing.T) {
-		if !server.isPathAllowed(os.TempDir()) {
+		if _, ok := server.validatePath(os.TempDir()); !ok {
 			t.Error("Base directory itself should be allowed")
 		}
 	})
@@ -1014,7 +982,7 @@ func TestIsPathAllowed(t *testing.T) {
 		// If base is /home/user, reject /home/user2
 		// This tests the trailing separator check
 		server := NewWithBasePath(8080, "/home/user")
-		if server.isPathAllowed("/home/user2") {
+		if _, ok := server.validatePath("/home/user2"); ok {
 			t.Error("Similar prefix path should be rejected")
 		}
 	})

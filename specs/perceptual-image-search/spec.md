@@ -121,6 +121,8 @@ Security is enforced through localhost-only binding by default, path traversal p
 8. THE cache.ListDirectories function SHALL enumerate all cached entries, extract directory paths from keys, truncate paths to 4 levels maximum depth, and return aggregated counts sorted alphabetically.
 9. WHEN `-cache-path` is provided and `-no-cache` is false, THE System SHALL open a BoltCache at the specified path with a 5-second timeout and 0600 permissions.
 10. WHEN `-no-cache` is true, THE System SHALL not open or use a cache regardless of `-cache-path`.
+11. THE cache.Cache interface SHALL define the methods Get(path, mtime), Put(path, mtime, data), Clear(), Stats(), Close(), and Scan(dir, callback), allowing alternative cache implementations to be substituted for BoltCache.
+12. THE cache.DirectoryInfo type SHALL hold a Path string and a Count int, representing a cached directory and its number of cached images.
 
 ### Requirement 8: Security
 
