@@ -1,6 +1,6 @@
 # ImgSearch - Perceptual Image Search Tool
 
-A fast, parallel image similarity search tool using perceptual hashing algorithms. Finds visually similar images across large directories.
+A fast, parallel image similarity search tool using perceptual hashing algorithms. Finds visually similar images across large directories by comparing multiple hash types and color histograms.
 
 ## Build & Run
 
