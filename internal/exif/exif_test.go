@@ -3,6 +3,7 @@ package exif
 import (
 	"image/color"
 	"os"
+	"strings"
 	"testing"
 
 	"imgsearch/internal/testutil"
@@ -12,8 +13,11 @@ func TestExtract(t *testing.T) {
 	t.Run("non-existent file", func(t *testing.T) {
 		data := Extract("/nonexistent/image.jpg")
 
-		if data.Error != "Cannot open file" {
-			t.Errorf("Error = %q, want %q", data.Error, "Cannot open file")
+		if data.Error == "" {
+			t.Error("Expected error for non-existent file")
+		}
+		if !strings.Contains(data.Error, "opening") {
+			t.Errorf("Error should mention opening, got %q", data.Error)
 		}
 	})
 
@@ -48,8 +52,11 @@ func TestExtract(t *testing.T) {
 		data := Extract(path)
 
 		// Should have error because no EXIF data
-		if data.Error != "No EXIF data" {
-			t.Errorf("Error = %q, want %q", data.Error, "No EXIF data")
+		if data.Error == "" {
+			t.Error("Expected error for JPEG without EXIF")
+		}
+		if !strings.Contains(data.Error, "no EXIF data") {
+			t.Errorf("Error should mention no EXIF data, got %q", data.Error)
 		}
 
 		// But should have file size

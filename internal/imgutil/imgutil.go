@@ -33,14 +33,14 @@ func LoadAndHash(path string) hash.Data {
 
 	file, err := os.Open(path)
 	if err != nil {
-		data.Error = err
+		data.Error = fmt.Errorf("opening image %q: %w", path, err)
 		return data
 	}
 	defer file.Close()
 
 	img, _, err := image.Decode(file)
 	if err != nil {
-		data.Error = err
+		data.Error = fmt.Errorf("decoding image %q: %w", path, err)
 		return data
 	}
 

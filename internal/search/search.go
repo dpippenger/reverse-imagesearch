@@ -1,6 +1,7 @@
 package search
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
@@ -13,13 +14,11 @@ import (
 
 // Config holds search parameters
 type Config struct {
-	SearchDir  string
-	Threshold  float64
-	Workers    int
-	TopN       int
-	Verbose    bool
-	OutputFile string
-	Cache      cache.Cache // Optional hash cache for faster repeated searches
+	SearchDir string
+	Threshold float64
+	Workers   int
+	TopN      int
+	Cache     cache.Cache // Optional hash cache for faster repeated searches
 }
 
 // Result is sent for each match found
@@ -32,8 +31,9 @@ type Result struct {
 	Error     string        `json:"error,omitempty"`
 }
 
-// Run performs the image search and calls the callback for each result
-func Run(sourceData hash.Data, config Config, callback func(Result)) {
+// Run performs the image search and calls the callback for each result.
+// The context can be used to cancel the search early (e.g., when a client disconnects).
+func Run(ctx context.Context, sourceData hash.Data, config Config, callback func(Result)) {
 	// Find all images in directory
 	images, err := imgutil.FindImages(config.SearchDir)
 	if err != nil {
@@ -53,7 +53,7 @@ func Run(sourceData hash.Data, config Config, callback func(Result)) {
 	}
 
 	var wg sync.WaitGroup
-	imageChan := make(chan string, len(images))
+	imageChan := make(chan string, numWorkers*2)
 	var resultMutex sync.Mutex
 	scanned := 0
 	resultCount := 0
@@ -64,6 +64,13 @@ func Run(sourceData hash.Data, config Config, callback func(Result)) {
 		go func() {
 			defer wg.Done()
 			for path := range imageChan {
+				// Check for cancellation
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+
 				var data hash.Data
 
 				// Try cache first
@@ -81,7 +88,9 @@ func Run(sourceData hash.Data, config Config, callback func(Result)) {
 					// Cache the result if we have a cache and no error
 					if config.Cache != nil && data.Error == nil {
 						if info, err := os.Stat(path); err == nil {
-							config.Cache.Put(path, info.ModTime(), &data)
+							if putErr := config.Cache.Put(path, info.ModTime(), &data); putErr != nil {
+								fmt.Fprintf(os.Stderr, "Warning: cache write failed for %s: %v\n", path, putErr)
+							}
 						}
 					}
 				}
@@ -127,14 +136,22 @@ func Run(sourceData hash.Data, config Config, callback func(Result)) {
 		}()
 	}
 
-	// Send work
+	// Send work (respects cancellation)
+sendLoop:
 	for _, img := range images {
-		imageChan <- img
+		select {
+		case imageChan <- img:
+		case <-ctx.Done():
+			break sendLoop
+		}
 	}
 	close(imageChan)
 
 	// Wait for completion
 	wg.Wait()
 
-	callback(Result{Done: true, Total: totalImages, Scanned: totalImages})
+	resultMutex.Lock()
+	finalScanned := scanned
+	resultMutex.Unlock()
+	callback(Result{Done: true, Total: totalImages, Scanned: finalScanned})
 }
