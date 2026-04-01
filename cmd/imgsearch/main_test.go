@@ -17,6 +17,9 @@ func resetFlags() {
 }
 
 func TestRunCLISearch(t *testing.T) {
+	origArgs := os.Args
+	defer func() { os.Args = origArgs }()
+
 	// Create temp dir with test images
 	tmpDir, cleanup, err := testutil.CreateTempDirWithSubdirs()
 	if err != nil {
@@ -95,6 +98,9 @@ func TestRunCLISearch(t *testing.T) {
 }
 
 func TestRunErrors(t *testing.T) {
+	origArgs := os.Args
+	defer func() { os.Args = origArgs }()
+
 	t.Run("non-existent source image", func(t *testing.T) {
 		resetFlags()
 		os.Args = []string{"imgsearch", "-source", "/nonexistent/image.jpg", "-dir", "."}
