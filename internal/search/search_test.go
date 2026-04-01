@@ -345,6 +345,41 @@ func TestRun(t *testing.T) {
 			t.Error("Expected Done result with nil cache")
 		}
 	})
+
+	t.Run("respects context cancellation", func(t *testing.T) {
+		tmpDir, cleanup, err := testutil.CreateTempDirWithSubdirs()
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer cleanup()
+
+		sourceImg := testutil.SolidColorImage(32, 32, color.RGBA{255, 0, 0, 255})
+		sourcePath, _ := testutil.CreateTempJPEG(sourceImg)
+		defer os.Remove(sourcePath)
+
+		sourceData := imgutil.LoadAndHash(sourcePath)
+
+		// Cancel context immediately
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		config := Config{
+			SearchDir: tmpDir,
+			Threshold: 0.0,
+			Workers:   1,
+		}
+
+		var doneReceived bool
+		Run(ctx, sourceData, config, func(r Result) {
+			if r.Done {
+				doneReceived = true
+			}
+		})
+
+		if !doneReceived {
+			t.Error("Expected Done result even with cancelled context")
+		}
+	})
 }
 
 func TestConfig(t *testing.T) {
