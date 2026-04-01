@@ -1,6 +1,7 @@
 package search
 
 import (
+	"context"
 	"image/color"
 	"os"
 	"path/filepath"
@@ -32,7 +33,7 @@ func TestRun(t *testing.T) {
 		var results []Result
 		var mu sync.Mutex
 
-		Run(sourceData, config, func(r Result) {
+		Run(context.Background(), sourceData, config, func(r Result) {
 			mu.Lock()
 			results = append(results, r)
 			mu.Unlock()
@@ -76,7 +77,7 @@ func TestRun(t *testing.T) {
 		var results []Result
 		var mu sync.Mutex
 
-		Run(sourceData, config, func(r Result) {
+		Run(context.Background(), sourceData, config, func(r Result) {
 			mu.Lock()
 			results = append(results, r)
 			mu.Unlock()
@@ -125,7 +126,7 @@ func TestRun(t *testing.T) {
 		var matchCount int
 		var doneReceived bool
 
-		Run(sourceData, config, func(r Result) {
+		Run(context.Background(), sourceData, config, func(r Result) {
 			if r.Done {
 				doneReceived = true
 			} else if r.Match.Path != "" {
@@ -172,7 +173,7 @@ func TestRun(t *testing.T) {
 
 		var matchCount int
 
-		Run(sourceData, config, func(r Result) {
+		Run(context.Background(), sourceData, config, func(r Result) {
 			if r.Match.Path != "" {
 				matchCount++
 			}
@@ -222,7 +223,7 @@ func TestRun(t *testing.T) {
 
 		var hasThumbnail bool
 
-		Run(sourceData, config, func(r Result) {
+		Run(context.Background(), sourceData, config, func(r Result) {
 			if r.Match.Path != "" && r.Thumbnail != "" {
 				hasThumbnail = true
 			}
@@ -254,7 +255,7 @@ func TestRun(t *testing.T) {
 
 		var finalScanned int
 
-		Run(sourceData, config, func(r Result) {
+		Run(context.Background(), sourceData, config, func(r Result) {
 			if r.Done {
 				finalScanned = r.Scanned
 			}
@@ -295,7 +296,7 @@ func TestRun(t *testing.T) {
 		}
 
 		// First run - should populate cache
-		Run(sourceData, config, func(r Result) {})
+		Run(context.Background(), sourceData, config, func(r Result) {})
 
 		// Verify cache was populated
 		stats := c.Stats()
@@ -304,7 +305,7 @@ func TestRun(t *testing.T) {
 		}
 
 		// Second run - should use cache hits
-		Run(sourceData, config, func(r Result) {})
+		Run(context.Background(), sourceData, config, func(r Result) {})
 
 		// Verify cache hits occurred
 		stats = c.Stats()
@@ -334,7 +335,7 @@ func TestRun(t *testing.T) {
 		}
 
 		var doneReceived bool
-		Run(sourceData, config, func(r Result) {
+		Run(context.Background(), sourceData, config, func(r Result) {
 			if r.Done {
 				doneReceived = true
 			}
@@ -349,12 +350,10 @@ func TestRun(t *testing.T) {
 func TestConfig(t *testing.T) {
 	t.Run("Config struct has expected fields", func(t *testing.T) {
 		config := Config{
-			SearchDir:  "/path/to/dir",
-			Threshold:  75.5,
-			Workers:    4,
-			TopN:       10,
-			Verbose:    true,
-			OutputFile: "results.txt",
+			SearchDir: "/path/to/dir",
+			Threshold: 75.5,
+			Workers:   4,
+			TopN:      10,
 		}
 
 		if config.SearchDir != "/path/to/dir" {
@@ -368,12 +367,6 @@ func TestConfig(t *testing.T) {
 		}
 		if config.TopN != 10 {
 			t.Errorf("TopN = %d, want 10", config.TopN)
-		}
-		if !config.Verbose {
-			t.Error("Verbose should be true")
-		}
-		if config.OutputFile != "results.txt" {
-			t.Errorf("OutputFile = %q, want %q", config.OutputFile, "results.txt")
 		}
 	})
 }
@@ -430,6 +423,6 @@ func BenchmarkRun(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		Run(sourceData, config, func(r Result) {})
+		Run(context.Background(), sourceData, config, func(r Result) {})
 	}
 }

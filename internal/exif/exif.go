@@ -35,7 +35,7 @@ func Extract(path string) Data {
 
 	file, err := os.Open(path)
 	if err != nil {
-		data.Error = "Cannot open file"
+		data.Error = fmt.Sprintf("opening %q: %v", path, err)
 		return data
 	}
 	defer file.Close()
@@ -57,7 +57,7 @@ func Extract(path string) Data {
 
 	x, err := exif.Decode(file)
 	if err != nil {
-		data.Error = "No EXIF data"
+		data.Error = fmt.Sprintf("no EXIF data in %q: %v", path, err)
 		return data
 	}
 

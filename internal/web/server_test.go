@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"image"
 	"image/color"
@@ -646,8 +647,13 @@ func TestHandleResults(t *testing.T) {
 		// Create a search result channel and register it
 		searchID := "test-search-123"
 		resultChan := make(chan search.Result, 10)
+		_, cancel := context.WithCancel(context.Background())
 		server.searchesMu.Lock()
-		server.searches[searchID] = resultChan
+		server.searches[searchID] = &searchState{
+			results:   resultChan,
+			cancel:    cancel,
+			createdAt: time.Now(),
+		}
 		server.searchesMu.Unlock()
 
 		// Send results in a goroutine

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/base64"
@@ -14,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"imgsearch/internal/cache"
 	"imgsearch/internal/exif"
@@ -24,14 +26,21 @@ import (
 //go:embed template.html app.js
 var content embed.FS
 
+// searchState tracks a running search and its cancellation.
+type searchState struct {
+	results   chan search.Result
+	cancel    context.CancelFunc
+	createdAt time.Time
+}
+
 // Server handles the web UI
 type Server struct {
 	port            int
 	bindAddr        string // Bind address (default "127.0.0.1" for security)
-	searches        map[string]chan search.Result
+	searches        map[string]*searchState
 	searchesMu      sync.RWMutex
-	allowedBasePath string           // Base path for file access (empty = user home)
-	cache           *cache.BoltCache // Optional hash cache
+	allowedBasePath string      // Base path for file access (empty = user home)
+	cache           cache.Cache // Optional hash cache
 }
 
 // validatePath checks if a path is within the allowed base directory and returns
@@ -100,8 +109,8 @@ func sanitizeFilename(filename string) string {
 func generateSearchID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback to less random but still unique ID
-		return hex.EncodeToString([]byte(fmt.Sprintf("%d", b)))
+		// Fallback to timestamp-based unique ID
+		return fmt.Sprintf("%x", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
 }
@@ -126,7 +135,7 @@ func New(port int) *Server {
 	return &Server{
 		port:     port,
 		bindAddr: "127.0.0.1",
-		searches: make(map[string]chan search.Result),
+		searches: make(map[string]*searchState),
 	}
 }
 
@@ -140,7 +149,7 @@ func NewWithOptions(port int, bindAddr, basePath string) *Server {
 	return &Server{
 		port:            port,
 		bindAddr:        bindAddr,
-		searches:        make(map[string]chan search.Result),
+		searches:        make(map[string]*searchState),
 		allowedBasePath: basePath,
 	}
 }
@@ -152,7 +161,7 @@ func NewWithBasePath(port int, basePath string) *Server {
 	return &Server{
 		port:            port,
 		bindAddr:        "127.0.0.1",
-		searches:        make(map[string]chan search.Result),
+		searches:        make(map[string]*searchState),
 		allowedBasePath: basePath,
 	}
 }
@@ -167,7 +176,7 @@ func NewWithCache(port int, bindAddr, basePath, cachePath string) (*Server, erro
 	s := &Server{
 		port:            port,
 		bindAddr:        bindAddr,
-		searches:        make(map[string]chan search.Result),
+		searches:        make(map[string]*searchState),
 		allowedBasePath: basePath,
 	}
 
@@ -184,7 +193,7 @@ func NewWithCache(port int, bindAddr, basePath, cachePath string) (*Server, erro
 
 // SetCache sets the cache for the server.
 // This allows setting the cache after server creation.
-func (s *Server) SetCache(c *cache.BoltCache) {
+func (s *Server) SetCache(c cache.Cache) {
 	s.cache = c
 }
 
@@ -198,18 +207,22 @@ func (s *Server) Close() error {
 
 // Start starts the web server
 func (s *Server) Start() error {
-	http.HandleFunc("/", s.handleIndex)
-	http.HandleFunc("/app.js", s.handleAppJS)
-	http.HandleFunc("/api/search", s.handleSearch)
-	http.HandleFunc("/api/results/", s.handleResults)
-	http.HandleFunc("/api/thumbnail", s.handleThumbnail)
-	http.HandleFunc("/api/browse", s.handleBrowse)
-	http.HandleFunc("/api/exif", s.handleExif)
-	http.HandleFunc("/api/download", s.handleDownload)
-	http.HandleFunc("/api/cache/stats", s.handleCacheStats)
-	http.HandleFunc("/api/cache/scan", s.handleCacheScan)
-	http.HandleFunc("/api/cache/clear", s.handleCacheClear)
-	http.HandleFunc("/api/cache/directories", s.handleCacheDirectories)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/app.js", s.handleAppJS)
+	mux.HandleFunc("/api/search", s.handleSearch)
+	mux.HandleFunc("/api/results/", s.handleResults)
+	mux.HandleFunc("/api/thumbnail", s.handleThumbnail)
+	mux.HandleFunc("/api/browse", s.handleBrowse)
+	mux.HandleFunc("/api/exif", s.handleExif)
+	mux.HandleFunc("/api/download", s.handleDownload)
+	mux.HandleFunc("/api/cache/stats", s.handleCacheStats)
+	mux.HandleFunc("/api/cache/scan", s.handleCacheScan)
+	mux.HandleFunc("/api/cache/clear", s.handleCacheClear)
+	mux.HandleFunc("/api/cache/directories", s.handleCacheDirectories)
+
+	// Start background cleanup of abandoned searches
+	go s.cleanupAbandonedSearches()
 
 	addr := fmt.Sprintf("%s:%d", s.bindAddr, s.port)
 	if s.bindAddr == "0.0.0.0" {
@@ -218,7 +231,28 @@ func (s *Server) Start() error {
 	} else {
 		fmt.Printf("Starting web server at http://%s\n", addr)
 	}
-	return http.ListenAndServe(addr, nil)
+	return http.ListenAndServe(addr, mux)
+}
+
+// cleanupAbandonedSearches periodically removes searches that were never consumed.
+func (s *Server) cleanupAbandonedSearches() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.searchesMu.Lock()
+		for id, state := range s.searches {
+			if time.Since(state.createdAt) > 2*time.Minute {
+				state.cancel()
+				delete(s.searches, id)
+				// Drain channel to unblock any blocked goroutine
+				go func(ch chan search.Result) {
+					for range ch {
+					}
+				}(state.results)
+			}
+		}
+		s.searchesMu.Unlock()
+	}
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -313,18 +347,26 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// Generate cryptographically random search ID
 	searchID := generateSearchID()
 
-	// Create result channel
+	// Create result channel and cancellation context
 	resultChan := make(chan search.Result, 100)
+	ctx, cancel := context.WithCancel(context.Background())
+
 	s.searchesMu.Lock()
-	s.searches[searchID] = resultChan
+	s.searches[searchID] = &searchState{
+		results:   resultChan,
+		cancel:    cancel,
+		createdAt: time.Now(),
+	}
 	s.searchesMu.Unlock()
 
-	// Start search in background
+	// Start search in background — close channel after Run returns to
+	// guarantee drain goroutines terminate even on context cancellation.
 	go func() {
-		search.Run(sourceData, config, func(result search.Result) {
-			resultChan <- result
-			if result.Done {
-				close(resultChan)
+		defer close(resultChan)
+		search.Run(ctx, sourceData, config, func(result search.Result) {
+			select {
+			case resultChan <- result:
+			case <-ctx.Done():
 			}
 		})
 	}()
@@ -337,7 +379,7 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 	searchID := strings.TrimPrefix(r.URL.Path, "/api/results/")
 
 	s.searchesMu.RLock()
-	resultChan, ok := s.searches[searchID]
+	state, ok := s.searches[searchID]
 	s.searchesMu.RUnlock()
 
 	if !ok {
@@ -357,13 +399,29 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for result := range resultChan {
-		data, _ := json.Marshal(result)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
+	// Stream results, detecting client disconnect via request context
+	clientCtx := r.Context()
+	for {
+		select {
+		case result, chanOpen := <-state.results:
+			if !chanOpen {
+				goto cleanup
+			}
+			data, _ := json.Marshal(result)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		case <-clientCtx.Done():
+			// Client disconnected — cancel the search and drain the channel
+			state.cancel()
+			go func() {
+				for range state.results {
+				}
+			}()
+			goto cleanup
+		}
 	}
 
-	// Clean up
+cleanup:
 	s.searchesMu.Lock()
 	delete(s.searches, searchID)
 	s.searchesMu.Unlock()
@@ -469,10 +527,12 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
 
-	// Get parent directory
+	// Get parent directory, clamped to allowed base path
 	parent := filepath.Dir(cleanPath)
 	if parent == cleanPath {
 		parent = "" // Root directory has no parent
+	} else if _, ok := s.validatePath(parent); !ok {
+		parent = "" // Parent is outside allowed base path
 	}
 
 	json.NewEncoder(w).Encode(BrowseResponse{
@@ -681,9 +741,14 @@ func (s *Server) handleCacheDirectories(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	dirs := s.cache.ListDirectories()
-	json.NewEncoder(w).Encode(CacheDirectoriesResponse{
-		Enabled:     true,
-		Directories: dirs,
-	})
+	// ListDirectories is on BoltCache, not Cache interface — type-assert
+	if bc, ok := s.cache.(*cache.BoltCache); ok {
+		dirs := bc.ListDirectories()
+		json.NewEncoder(w).Encode(CacheDirectoriesResponse{
+			Enabled:     true,
+			Directories: dirs,
+		})
+	} else {
+		json.NewEncoder(w).Encode(CacheDirectoriesResponse{Enabled: true})
+	}
 }

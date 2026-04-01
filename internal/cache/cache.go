@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -361,13 +362,9 @@ func (c *BoltCache) ListDirectories() []DirectoryInfo {
 	}
 
 	// Sort by path
-	for i := 0; i < len(dirs); i++ {
-		for j := i + 1; j < len(dirs); j++ {
-			if dirs[i].Path > dirs[j].Path {
-				dirs[i], dirs[j] = dirs[j], dirs[i]
-			}
-		}
-	}
+	sort.Slice(dirs, func(i, j int) bool {
+		return dirs[i].Path < dirs[j].Path
+	})
 
 	return dirs
 }

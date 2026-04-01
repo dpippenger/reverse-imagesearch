@@ -70,7 +70,7 @@ BoltDB-based persistent cache for computed image hashes. Eliminates redundant O(
 
 ### Search Engine (`internal/search`)
 
-- `search.Run()` - Performs parallel image search with callback for each result
+- `search.Run(ctx, sourceData, config, callback)` - Performs parallel image search with callback for each result; supports context cancellation
 - Uses configurable worker pool (defaults to `runtime.NumCPU()`)
 - Integrates with cache for faster repeated searches
 
@@ -138,13 +138,11 @@ type Data struct {
 
 // internal/search
 type Config struct {
-    SearchDir  string
-    Threshold  float64
-    Workers    int
-    TopN       int
-    Verbose    bool
-    OutputFile string
-    Cache      cache.Cache // Optional hash cache
+    SearchDir string
+    Threshold float64
+    Workers   int
+    TopN      int
+    Cache     cache.Cache // Optional hash cache
 }
 
 // internal/search

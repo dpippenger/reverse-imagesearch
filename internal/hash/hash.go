@@ -1,12 +1,31 @@
 package hash
 
 import (
+	"fmt"
 	"image"
 	"math"
+	"math/bits"
 	"sort"
+	"sync"
 
 	"github.com/nfnt/resize"
 )
+
+// dctSize is the fixed size used for DCT computation in perceptual hashing.
+const dctSize = 32
+
+var (
+	dctCosinesOnce sync.Once
+	dctCosines     [dctSize][dctSize]float64
+)
+
+func initDCTCosines() {
+	for i := 0; i < dctSize; i++ {
+		for j := 0; j < dctSize; j++ {
+			dctCosines[i][j] = math.Cos(math.Pi * float64(i) * (float64(j) + 0.5) / float64(dctSize))
+		}
+	}
+}
 
 // ColorHistogram computes a simple color histogram for additional comparison
 type ColorHistogram struct {
@@ -79,21 +98,18 @@ func Perceptual(img image.Image) uint64 {
 	return hash
 }
 
-// computeDCT computes the Discrete Cosine Transform of a 2D array
+// computeDCT computes the Discrete Cosine Transform of a 2D array.
+// Input must be dctSize x dctSize (32x32) to match the precomputed cosine table.
 func computeDCT(input [][]float64) [][]float64 {
+	dctCosinesOnce.Do(initDCTCosines)
+
 	size := len(input)
+	if size != dctSize {
+		panic(fmt.Sprintf("computeDCT: input size %d != expected %d", size, dctSize))
+	}
 	output := make([][]float64, size)
 	for i := range output {
 		output[i] = make([]float64, size)
-	}
-
-	// Precompute cosine values
-	cosines := make([][]float64, size)
-	for i := range cosines {
-		cosines[i] = make([]float64, size)
-		for j := range cosines[i] {
-			cosines[i][j] = math.Cos(math.Pi * float64(i) * (float64(j) + 0.5) / float64(size))
-		}
 	}
 
 	for u := 0; u < size; u++ {
@@ -101,7 +117,7 @@ func computeDCT(input [][]float64) [][]float64 {
 			var sum float64
 			for x := 0; x < size; x++ {
 				for y := 0; y < size; y++ {
-					sum += input[y][x] * cosines[u][x] * cosines[v][y]
+					sum += input[y][x] * dctCosines[u][x] * dctCosines[v][y]
 				}
 			}
 			// Normalization factors
@@ -186,13 +202,7 @@ func Difference(img image.Image) uint64 {
 
 // HammingDistance calculates the number of differing bits between two hashes
 func HammingDistance(hash1, hash2 uint64) int {
-	xor := hash1 ^ hash2
-	count := 0
-	for xor != 0 {
-		count++
-		xor &= xor - 1
-	}
-	return count
+	return bits.OnesCount64(hash1 ^ hash2)
 }
 
 // Similarity converts hamming distance to a similarity percentage (0-100)

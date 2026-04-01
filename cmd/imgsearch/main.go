@@ -1,21 +1,28 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
-	"runtime"
 	"sort"
 	"sync"
 
 	"imgsearch/internal/cache"
 	"imgsearch/internal/hash"
 	"imgsearch/internal/imgutil"
+	"imgsearch/internal/search"
 	"imgsearch/internal/web"
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	// Command line flags
 	sourceFile := flag.String("source", "", "Source image file to compare against")
 	searchDir := flag.String("dir", ".", "Directory to search for similar images")
@@ -51,11 +58,7 @@ func main() {
 			server.SetCache(hashCache)
 			fmt.Printf("Hash caching enabled: %s\n", *cachePath)
 		}
-		if err := server.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error starting web server: %v\n", err)
-			os.Exit(1)
-		}
-		return
+		return server.Start()
 	}
 
 	// CLI mode
@@ -67,18 +70,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Set number of workers
-	numWorkers := *workers
-	if numWorkers <= 0 {
-		numWorkers = runtime.NumCPU()
-	}
-
 	// Load source image
 	fmt.Printf("Loading source image: %s\n", *sourceFile)
 	sourceData := imgutil.LoadAndHash(*sourceFile)
 	if sourceData.Error != nil {
-		fmt.Fprintf(os.Stderr, "Error loading source image: %v\n", sourceData.Error)
-		os.Exit(1)
+		return fmt.Errorf("loading source image: %v", sourceData.Error)
 	}
 
 	if *verbose {
@@ -86,110 +82,48 @@ func main() {
 			sourceData.PHash, sourceData.AHash, sourceData.DHash)
 	}
 
-	// Find all images in directory
 	fmt.Printf("Scanning directory: %s\n", *searchDir)
-	images, err := imgutil.FindImages(*searchDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error scanning directory: %v\n", err)
-		os.Exit(1)
+
+	config := search.Config{
+		SearchDir: *searchDir,
+		Threshold: *threshold,
+		Workers:   *workers,
+		TopN:      *topN,
+	}
+	if hashCache != nil {
+		config.Cache = hashCache
 	}
 
-	// Remove source from search if present
-	var searchImages []string
-	absSource, _ := filepath.Abs(*sourceFile)
-	for _, img := range images {
-		absImg, _ := filepath.Abs(img)
-		if absImg != absSource {
-			searchImages = append(searchImages, img)
-		}
-	}
-
-	fmt.Printf("Found %d images to compare\n", len(searchImages))
-
-	if len(searchImages) == 0 {
-		fmt.Println("No images found to compare.")
-		return
-	}
-
-	// Helper function to output a result line to screen
 	resultCount := 0
 	var resultMutex sync.Mutex
 	var allMatches []imgutil.Match
 
-	outputResult := func(match imgutil.Match) {
-		resultMutex.Lock()
-		defer resultMutex.Unlock()
-		resultCount++
-		allMatches = append(allMatches, match)
-		fmt.Printf("%d. [%.1f%%] %s\n", resultCount, match.Similarity, match.Path)
-		if *verbose {
-			fmt.Printf("   pHash: %016x, Hamming distance: %d\n",
-				match.Hash, hash.HammingDistance(sourceData.PHash, match.Hash))
-		}
-	}
-
 	fmt.Println("\n=== Results (as found) ===")
 
-	// Process images in parallel
-	var wg sync.WaitGroup
-	imageChan := make(chan string, len(searchImages))
+	search.Run(context.Background(), sourceData, config, func(r search.Result) {
+		if r.Error != "" {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", r.Error)
+			return
+		}
+		if r.Done {
+			return
+		}
+		if r.Match.Path == "" {
+			return
+		}
 
-	// Start workers - results are printed as they are found
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for path := range imageChan {
-				var data hash.Data
+		resultMutex.Lock()
+		resultCount++
+		allMatches = append(allMatches, r.Match)
+		count := resultCount
+		resultMutex.Unlock()
 
-				// Try cache first
-				if hashCache != nil {
-					if info, err := os.Stat(path); err == nil {
-						if cached, ok := hashCache.Get(path, info.ModTime()); ok {
-							data = *cached
-						}
-					}
-				}
-
-				// Compute if not cached
-				if data.Path == "" {
-					data = imgutil.LoadAndHash(path)
-					// Cache the result
-					if hashCache != nil && data.Error == nil {
-						if info, err := os.Stat(path); err == nil {
-							hashCache.Put(path, info.ModTime(), &data)
-						}
-					}
-				}
-
-				if data.Error != nil {
-					if *verbose {
-						fmt.Fprintf(os.Stderr, "Skipping %s: %v\n", path, data.Error)
-					}
-					continue
-				}
-
-				similarity := imgutil.ComputeSimilarity(sourceData, data)
-				if similarity >= *threshold {
-					match := imgutil.Match{
-						Path:       path,
-						Similarity: similarity,
-						Hash:       data.PHash,
-					}
-					outputResult(match)
-				}
-			}
-		}()
-	}
-
-	// Send work
-	for _, img := range searchImages {
-		imageChan <- img
-	}
-	close(imageChan)
-
-	// Wait for completion
-	wg.Wait()
+		fmt.Printf("%d. [%.1f%%] %s\n", count, r.Match.Similarity, r.Match.Path)
+		if *verbose {
+			fmt.Printf("   pHash: %016x, Hamming distance: %d\n",
+				r.Match.Hash, hash.HammingDistance(sourceData.PHash, r.Match.Hash))
+		}
+	})
 
 	// Summary
 	fmt.Printf("\n=== Total matches found: %d ===\n", resultCount)
@@ -198,8 +132,7 @@ func main() {
 	if *outputFile != "" {
 		outFile, err := os.Create(*outputFile)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("creating output file: %v", err)
 		}
 		defer outFile.Close()
 
@@ -225,4 +158,6 @@ func main() {
 		fmt.Fprintf(outFile, "\n=== Total matches: %d ===\n", len(outputMatches))
 		fmt.Printf("Sorted results written to: %s\n", *outputFile)
 	}
+
+	return nil
 }
