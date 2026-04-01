@@ -234,9 +234,9 @@ func CreateTempJPEGWithRealExif() (string, error) {
 
 	// Construct final JPEG: SOI + APP1 + rest of JPEG (skip SOI from encoded JPEG)
 	var final bytes.Buffer
-	final.Write([]byte{0xFF, 0xD8})            // SOI
-	final.Write(buildAPP1Segment(exifData))     // APP1 with EXIF
-	final.Write(jpegData[2:])                   // rest of JPEG after SOI
+	final.Write([]byte{0xFF, 0xD8})         // SOI
+	final.Write(buildAPP1Segment(exifData)) // APP1 with EXIF
+	final.Write(jpegData[2:])               // rest of JPEG after SOI
 
 	tmpFile, err := os.CreateTemp("", "exif-test-*.jpg")
 	if err != nil {
@@ -256,8 +256,8 @@ func buildAPP1Segment(tiffData []byte) []byte {
 	exifHeader := []byte("Exif\x00\x00")
 	length := 2 + len(exifHeader) + len(tiffData) // 2 for length field itself
 	var seg bytes.Buffer
-	seg.Write([]byte{0xFF, 0xE1})                          // APP1 marker
-	seg.Write([]byte{byte(length >> 8), byte(length)})     // length
+	seg.Write([]byte{0xFF, 0xE1})                      // APP1 marker
+	seg.Write([]byte{byte(length >> 8), byte(length)}) // length
 	seg.Write(exifHeader)
 	seg.Write(tiffData)
 	return seg.Bytes()
@@ -268,9 +268,9 @@ func buildExifData() []byte {
 	var b bytes.Buffer
 
 	// TIFF header (offset 0)
-	b.Write([]byte("MM"))                       // big-endian
-	b.Write([]byte{0x00, 0x2A})                 // magic 42
-	b.Write([]byte{0x00, 0x00, 0x00, 0x08})     // offset to IFD0
+	b.Write([]byte("MM"))                   // big-endian
+	b.Write([]byte{0x00, 0x2A})             // magic 42
+	b.Write([]byte{0x00, 0x00, 0x00, 0x08}) // offset to IFD0
 
 	// IFD0 at offset 8
 	// 5 entries: Make, Model, Orientation, DateTime, ExifIFD pointer
