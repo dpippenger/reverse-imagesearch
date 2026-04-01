@@ -211,3 +211,162 @@ func CreateTempJPEGWithExif() (string, error) {
 	}
 	return CreateTempJPEG(img)
 }
+
+// CreateTempJPEGWithRealExif creates a temporary JPEG file with embedded EXIF
+// metadata that the goexif library can parse. Contains: Make, Model, Orientation,
+// DateTime, FNumber, ExposureTime, ISO, and FocalLength tags.
+func CreateTempJPEGWithRealExif() (string, error) {
+	// First, create a normal JPEG in memory
+	img := image.NewGray(image.Rect(0, 0, 32, 32))
+	for y := 0; y < 32; y++ {
+		for x := 0; x < 32; x++ {
+			img.Set(x, y, color.Gray{128})
+		}
+	}
+	var jpegBuf bytes.Buffer
+	if err := jpeg.Encode(&jpegBuf, img, &jpeg.Options{Quality: 90}); err != nil {
+		return "", err
+	}
+	jpegData := jpegBuf.Bytes()
+
+	// Build EXIF APP1 segment with TIFF/IFD structure (big-endian)
+	exifData := buildExifData()
+
+	// Construct final JPEG: SOI + APP1 + rest of JPEG (skip SOI from encoded JPEG)
+	var final bytes.Buffer
+	final.Write([]byte{0xFF, 0xD8})            // SOI
+	final.Write(buildAPP1Segment(exifData))     // APP1 with EXIF
+	final.Write(jpegData[2:])                   // rest of JPEG after SOI
+
+	tmpFile, err := os.CreateTemp("", "exif-test-*.jpg")
+	if err != nil {
+		return "", err
+	}
+	defer tmpFile.Close()
+
+	if _, err := tmpFile.Write(final.Bytes()); err != nil {
+		os.Remove(tmpFile.Name())
+		return "", err
+	}
+	return tmpFile.Name(), nil
+}
+
+// buildAPP1Segment wraps TIFF data in a JPEG APP1 segment.
+func buildAPP1Segment(tiffData []byte) []byte {
+	exifHeader := []byte("Exif\x00\x00")
+	length := 2 + len(exifHeader) + len(tiffData) // 2 for length field itself
+	var seg bytes.Buffer
+	seg.Write([]byte{0xFF, 0xE1})                          // APP1 marker
+	seg.Write([]byte{byte(length >> 8), byte(length)})     // length
+	seg.Write(exifHeader)
+	seg.Write(tiffData)
+	return seg.Bytes()
+}
+
+// buildExifData constructs minimal TIFF/IFD data with common EXIF tags.
+func buildExifData() []byte {
+	var b bytes.Buffer
+
+	// TIFF header (offset 0)
+	b.Write([]byte("MM"))                       // big-endian
+	b.Write([]byte{0x00, 0x2A})                 // magic 42
+	b.Write([]byte{0x00, 0x00, 0x00, 0x08})     // offset to IFD0
+
+	// IFD0 at offset 8
+	// 5 entries: Make, Model, Orientation, DateTime, ExifIFD pointer
+	writeU16(&b, 5) // entry count
+
+	// Calculate data area offset: 8 (header) + 2 (count) + 5*12 (entries) + 4 (next IFD) = 74
+	dataOffset := uint32(74)
+
+	// Entry 1: Make (0x010F, ASCII)
+	makeStr := "TestCam\x00"
+	writeIFDEntry(&b, 0x010F, 2, uint32(len(makeStr)), dataOffset)
+	makeOffset := dataOffset
+	dataOffset += uint32(len(makeStr))
+
+	// Entry 2: Model (0x0110, ASCII)
+	modelStr := "T100\x00"
+	writeIFDEntry(&b, 0x0110, 2, uint32(len(modelStr)), dataOffset)
+	dataOffset += uint32(len(modelStr))
+
+	// Entry 3: Orientation (0x0112, SHORT, value=1 inline)
+	writeIFDEntryInline(&b, 0x0112, 3, 1, []byte{0x00, 0x01, 0x00, 0x00})
+
+	// Entry 4: DateTime (0x0132, ASCII)
+	dtStr := "2024:01:15 10:30:00\x00"
+	writeIFDEntry(&b, 0x0132, 2, uint32(len(dtStr)), dataOffset)
+	dataOffset += uint32(len(dtStr))
+
+	// Entry 5: ExifIFD pointer (0x8769, LONG)
+	exifIFDOffset := dataOffset // will write Exif sub-IFD here after data
+	writeIFDEntryInline(&b, 0x8769, 4, 1, []byte{
+		byte(exifIFDOffset >> 24), byte(exifIFDOffset >> 16),
+		byte(exifIFDOffset >> 8), byte(exifIFDOffset),
+	})
+
+	// Next IFD offset (0 = no more IFDs)
+	writeU32(&b, 0)
+
+	// Data area (starting at offset 74)
+	b.Write([]byte(makeStr))
+	b.Write([]byte(modelStr))
+	b.Write([]byte(dtStr))
+
+	// Exif Sub-IFD at exifIFDOffset
+	// 4 entries: ExposureTime, FNumber, ISOSpeedRatings, FocalLength
+	writeU16(&b, 4)
+
+	// Calculate sub-IFD data offset
+	subDataOffset := exifIFDOffset + 2 + 4*12 + 4 // count + entries + next
+
+	// ExposureTime (0x829A, RATIONAL) = 1/125
+	writeIFDEntry(&b, 0x829A, 5, 1, subDataOffset)
+	subDataOffset += 8
+
+	// FNumber (0x829D, RATIONAL) = 28/10
+	writeIFDEntry(&b, 0x829D, 5, 1, subDataOffset)
+	subDataOffset += 8
+
+	// ISOSpeedRatings (0x8827, SHORT, value=400 inline)
+	writeIFDEntryInline(&b, 0x8827, 3, 1, []byte{0x01, 0x90, 0x00, 0x00})
+
+	// FocalLength (0x920A, RATIONAL) = 50/1
+	writeIFDEntry(&b, 0x920A, 5, 1, subDataOffset)
+
+	// Next IFD offset
+	writeU32(&b, 0)
+
+	// Rational data
+	writeU32(&b, 1)   // ExposureTime numerator
+	writeU32(&b, 125) // ExposureTime denominator
+	writeU32(&b, 28)  // FNumber numerator
+	writeU32(&b, 10)  // FNumber denominator
+	writeU32(&b, 50)  // FocalLength numerator
+	writeU32(&b, 1)   // FocalLength denominator
+
+	_ = makeOffset // suppress unused warning
+	return b.Bytes()
+}
+
+func writeU16(b *bytes.Buffer, v uint16) {
+	b.Write([]byte{byte(v >> 8), byte(v)})
+}
+
+func writeU32(b *bytes.Buffer, v uint32) {
+	b.Write([]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
+}
+
+func writeIFDEntry(b *bytes.Buffer, tag, typ uint16, count, offset uint32) {
+	writeU16(b, tag)
+	writeU16(b, typ)
+	writeU32(b, count)
+	writeU32(b, offset)
+}
+
+func writeIFDEntryInline(b *bytes.Buffer, tag, typ uint16, count uint32, value []byte) {
+	writeU16(b, tag)
+	writeU16(b, typ)
+	writeU32(b, count)
+	b.Write(value)
+}

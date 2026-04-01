@@ -153,6 +153,75 @@ func TestExtract(t *testing.T) {
 			t.Errorf("FileSize should be 0, got %d", data.FileSize)
 		}
 	})
+
+	t.Run("JPEG with real EXIF metadata", func(t *testing.T) {
+		path, err := testutil.CreateTempJPEGWithRealExif()
+		if err != nil {
+			t.Fatalf("Failed to create EXIF JPEG: %v", err)
+		}
+		defer os.Remove(path)
+
+		data := Extract(path)
+
+		// Should have no error — EXIF data is present
+		if data.Error != "" {
+			t.Fatalf("Unexpected error: %s", data.Error)
+		}
+
+		// File metadata
+		if data.FileSize <= 0 {
+			t.Error("FileSize should be > 0")
+		}
+		if data.Width != 32 || data.Height != 32 {
+			t.Errorf("Dimensions = %dx%d, want 32x32", data.Width, data.Height)
+		}
+
+		// EXIF string fields
+		if data.Make != "TestCam" {
+			t.Errorf("Make = %q, want %q", data.Make, "TestCam")
+		}
+		if data.Model != "T100" {
+			t.Errorf("Model = %q, want %q", data.Model, "T100")
+		}
+
+		// DateTime
+		if data.DateTime != "2024-01-15 10:30:00" {
+			t.Errorf("DateTime = %q, want %q", data.DateTime, "2024-01-15 10:30:00")
+		}
+
+		// Orientation
+		if data.Orientation != "Normal" {
+			t.Errorf("Orientation = %q, want %q", data.Orientation, "Normal")
+		}
+
+		// FNumber = 28/10 = f/2.8
+		if data.FNumber != "f/2.8" {
+			t.Errorf("FNumber = %q, want %q", data.FNumber, "f/2.8")
+		}
+
+		// ExposureTime = 1/125
+		if data.ExposureTime != "1/125 s" {
+			t.Errorf("ExposureTime = %q, want %q", data.ExposureTime, "1/125 s")
+		}
+
+		// ISO
+		if data.ISO != "ISO 400" {
+			t.Errorf("ISO = %q, want %q", data.ISO, "ISO 400")
+		}
+
+		// FocalLength = 50/1 = 50 mm
+		if data.FocalLength != "50 mm" {
+			t.Errorf("FocalLength = %q, want %q", data.FocalLength, "50 mm")
+		}
+
+		// GPS and LensModel not embedded — should be empty
+		if data.GPSLatitude != "" {
+			t.Errorf("GPSLatitude should be empty, got %q", data.GPSLatitude)
+		}
+		if data.LensModel != "" {
+			t.Errorf("LensModel should be empty, got %q", data.LensModel)
+		}
+	})
 }
 
 // TestOrientationMap tests that orientation values map to correct strings
