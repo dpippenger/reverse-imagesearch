@@ -282,7 +282,6 @@ func buildExifData() []byte {
 	// Entry 1: Make (0x010F, ASCII)
 	makeStr := "TestCam\x00"
 	writeIFDEntry(&b, 0x010F, 2, uint32(len(makeStr)), dataOffset)
-	makeOffset := dataOffset
 	dataOffset += uint32(len(makeStr))
 
 	// Entry 2: Model (0x0110, ASCII)
@@ -345,7 +344,6 @@ func buildExifData() []byte {
 	writeU32(&b, 50)  // FocalLength numerator
 	writeU32(&b, 1)   // FocalLength denominator
 
-	_ = makeOffset // suppress unused warning
 	return b.Bytes()
 }
 
