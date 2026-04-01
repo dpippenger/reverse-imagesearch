@@ -260,10 +260,11 @@ func (s *Server) cleanupAbandonedSearches() {
 		case <-ticker.C:
 			s.searchesMu.Lock()
 			for id, state := range s.searches {
+				timeout := 2 * time.Minute
 				if state.consuming {
-					continue // Skip actively consumed searches
+					timeout = 10 * time.Minute // Longer timeout for active SSE clients
 				}
-				if time.Since(state.lastActivity) > 2*time.Minute {
+				if time.Since(state.lastActivity) > timeout {
 					state.cancel()
 					delete(s.searches, id)
 					go func(ch chan search.Result) {
@@ -402,9 +403,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 	searchID := strings.TrimPrefix(r.URL.Path, "/api/results/")
 
-	s.searchesMu.RLock()
+	// Atomically look up and mark as consuming to prevent TOCTOU race with cleanup
+	s.searchesMu.Lock()
 	state, ok := s.searches[searchID]
-	s.searchesMu.RUnlock()
+	if ok {
+		state.consuming = true
+		state.lastActivity = time.Now()
+	}
+	s.searchesMu.Unlock()
 
 	if !ok {
 		http.Error(w, "Search not found", http.StatusNotFound)
@@ -423,14 +429,9 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mark as actively consuming so cleanup goroutine skips this search
-	s.searchesMu.Lock()
-	state.consuming = true
-	state.lastActivity = time.Now()
-	s.searchesMu.Unlock()
-
 	// Stream results, detecting client disconnect via request context
 	clientCtx := r.Context()
+	lastUpdate := time.Now()
 	for {
 		select {
 		case result, chanOpen := <-state.results:
@@ -440,9 +441,13 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 			data, _ := json.Marshal(result)
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
-			s.searchesMu.Lock()
-			state.lastActivity = time.Now()
-			s.searchesMu.Unlock()
+			// Throttle lastActivity updates — cleanup checks every 30s
+			if time.Since(lastUpdate) > 10*time.Second {
+				s.searchesMu.Lock()
+				state.lastActivity = time.Now()
+				s.searchesMu.Unlock()
+				lastUpdate = time.Now()
+			}
 		case <-clientCtx.Done():
 			// Client disconnected — cancel the search and drain the channel
 			state.cancel()

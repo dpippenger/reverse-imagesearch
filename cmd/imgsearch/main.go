@@ -86,12 +86,16 @@ func run() error {
 	fmt.Printf("Scanning directory: %s\n", *searchDir)
 
 	// Resolve source path for exclusion from results
-	absSource, _ := filepath.Abs(*sourceFile)
+	absSource, err := filepath.Abs(*sourceFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not resolve source path: %v\n", err)
+	}
 
 	config := search.Config{
 		SearchDir: *searchDir,
 		Threshold: *threshold,
 		Workers:   *workers,
+		TopN:      *topN,
 	}
 	if hashCache != nil {
 		config.Cache = hashCache
