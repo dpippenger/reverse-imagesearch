@@ -649,10 +649,12 @@ func TestHandleResults(t *testing.T) {
 		resultChan := make(chan search.Result, 10)
 		_, cancel := context.WithCancel(context.Background())
 		server.searchesMu.Lock()
+		now := time.Now()
 		server.searches[searchID] = &searchState{
-			results:   resultChan,
-			cancel:    cancel,
-			createdAt: time.Now(),
+			results:      resultChan,
+			cancel:       cancel,
+			createdAt:    now,
+			lastActivity: now,
 		}
 		server.searchesMu.Unlock()
 
@@ -690,6 +692,56 @@ func TestHandleResults(t *testing.T) {
 		}
 		if !strings.Contains(bodyStr, "/test/image.jpg") {
 			t.Error("Response should contain match path")
+		}
+	})
+
+	t.Run("results handles client disconnect", func(t *testing.T) {
+		server := New(8080)
+
+		searchID := "test-disconnect-456"
+		resultChan := make(chan search.Result, 10)
+		_, cancel := context.WithCancel(context.Background())
+		now := time.Now()
+		server.searchesMu.Lock()
+		server.searches[searchID] = &searchState{
+			results:      resultChan,
+			cancel:       cancel,
+			createdAt:    now,
+			lastActivity: now,
+		}
+		server.searchesMu.Unlock()
+
+		// Create a cancellable request context to simulate client disconnect
+		ctx, cancelReq := context.WithCancel(context.Background())
+
+		// Send one result, then cancel the request context
+		go func() {
+			resultChan <- search.Result{
+				Match:   imgutil.Match{Path: "/test/image.jpg", Similarity: 90.0},
+				Total:   10,
+				Scanned: 1,
+			}
+			// Give the handler time to process, then simulate disconnect
+			time.Sleep(10 * time.Millisecond)
+			cancelReq()
+			// Close the channel so drain goroutine can finish
+			time.Sleep(10 * time.Millisecond)
+			close(resultChan)
+		}()
+
+		req := httptest.NewRequest("GET", "/api/results/"+searchID, nil)
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+
+		server.handleResults(w, req)
+
+		// Verify the search was cleaned up from the map
+		server.searchesMu.RLock()
+		_, exists := server.searches[searchID]
+		server.searchesMu.RUnlock()
+
+		if exists {
+			t.Error("Search should be removed from map after disconnect")
 		}
 	})
 }

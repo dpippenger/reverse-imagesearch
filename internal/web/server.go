@@ -28,9 +28,11 @@ var content embed.FS
 
 // searchState tracks a running search and its cancellation.
 type searchState struct {
-	results   chan search.Result
-	cancel    context.CancelFunc
-	createdAt time.Time
+	results      chan search.Result
+	cancel       context.CancelFunc
+	createdAt    time.Time
+	lastActivity time.Time
+	consuming    bool // true while a client is streaming results
 }
 
 // Server handles the web UI
@@ -41,6 +43,7 @@ type Server struct {
 	searchesMu      sync.RWMutex
 	allowedBasePath string      // Base path for file access (empty = user home)
 	cache           cache.Cache // Optional hash cache
+	done            chan struct{}
 }
 
 // validatePath checks if a path is within the allowed base directory and returns
@@ -105,12 +108,12 @@ func sanitizeFilename(filename string) string {
 	return result.String()
 }
 
-// generateSearchID creates a cryptographically random search ID
+// generateSearchID creates a cryptographically random search ID.
+// Panics if the OS entropy source is unavailable.
 func generateSearchID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback to timestamp-based unique ID
-		return fmt.Sprintf("%x", time.Now().UnixNano())
+		panic("crypto/rand.Read failed: " + err.Error())
 	}
 	return hex.EncodeToString(b)
 }
@@ -136,6 +139,7 @@ func New(port int) *Server {
 		port:     port,
 		bindAddr: "127.0.0.1",
 		searches: make(map[string]*searchState),
+		done:     make(chan struct{}),
 	}
 }
 
@@ -151,6 +155,7 @@ func NewWithOptions(port int, bindAddr, basePath string) *Server {
 		bindAddr:        bindAddr,
 		searches:        make(map[string]*searchState),
 		allowedBasePath: basePath,
+		done:            make(chan struct{}),
 	}
 }
 
@@ -163,6 +168,7 @@ func NewWithBasePath(port int, basePath string) *Server {
 		bindAddr:        "127.0.0.1",
 		searches:        make(map[string]*searchState),
 		allowedBasePath: basePath,
+		done:            make(chan struct{}),
 	}
 }
 
@@ -178,6 +184,7 @@ func NewWithCache(port int, bindAddr, basePath, cachePath string) (*Server, erro
 		bindAddr:        bindAddr,
 		searches:        make(map[string]*searchState),
 		allowedBasePath: basePath,
+		done:            make(chan struct{}),
 	}
 
 	if cachePath != "" {
@@ -197,8 +204,14 @@ func (s *Server) SetCache(c cache.Cache) {
 	s.cache = c
 }
 
-// Close closes any resources held by the server.
+// Close closes any resources held by the server and stops background goroutines.
 func (s *Server) Close() error {
+	select {
+	case <-s.done:
+		// Already closed
+	default:
+		close(s.done)
+	}
 	if s.cache != nil {
 		return s.cache.Close()
 	}
@@ -234,24 +247,33 @@ func (s *Server) Start() error {
 	return http.ListenAndServe(addr, mux)
 }
 
-// cleanupAbandonedSearches periodically removes searches that were never consumed.
+// cleanupAbandonedSearches periodically removes searches that have been inactive.
+// It skips searches that are actively being consumed by an SSE client.
+// Stops when s.done is closed.
 func (s *Server) cleanupAbandonedSearches() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		s.searchesMu.Lock()
-		for id, state := range s.searches {
-			if time.Since(state.createdAt) > 2*time.Minute {
-				state.cancel()
-				delete(s.searches, id)
-				// Drain channel to unblock any blocked goroutine
-				go func(ch chan search.Result) {
-					for range ch {
-					}
-				}(state.results)
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			s.searchesMu.Lock()
+			for id, state := range s.searches {
+				if state.consuming {
+					continue // Skip actively consumed searches
+				}
+				if time.Since(state.lastActivity) > 2*time.Minute {
+					state.cancel()
+					delete(s.searches, id)
+					go func(ch chan search.Result) {
+						for range ch {
+						}
+					}(state.results)
+				}
 			}
+			s.searchesMu.Unlock()
 		}
-		s.searchesMu.Unlock()
 	}
 }
 
@@ -351,11 +373,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	resultChan := make(chan search.Result, 100)
 	ctx, cancel := context.WithCancel(context.Background())
 
+	now := time.Now()
 	s.searchesMu.Lock()
 	s.searches[searchID] = &searchState{
-		results:   resultChan,
-		cancel:    cancel,
-		createdAt: time.Now(),
+		results:      resultChan,
+		cancel:       cancel,
+		createdAt:    now,
+		lastActivity: now,
 	}
 	s.searchesMu.Unlock()
 
@@ -399,6 +423,12 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Mark as actively consuming so cleanup goroutine skips this search
+	s.searchesMu.Lock()
+	state.consuming = true
+	state.lastActivity = time.Now()
+	s.searchesMu.Unlock()
+
 	// Stream results, detecting client disconnect via request context
 	clientCtx := r.Context()
 	for {
@@ -410,6 +440,9 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 			data, _ := json.Marshal(result)
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
+			s.searchesMu.Lock()
+			state.lastActivity = time.Now()
+			s.searchesMu.Unlock()
 		case <-clientCtx.Done():
 			// Client disconnected — cancel the search and drain the channel
 			state.cancel()
@@ -741,14 +774,9 @@ func (s *Server) handleCacheDirectories(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// ListDirectories is on BoltCache, not Cache interface — type-assert
-	if bc, ok := s.cache.(*cache.BoltCache); ok {
-		dirs := bc.ListDirectories()
-		json.NewEncoder(w).Encode(CacheDirectoriesResponse{
-			Enabled:     true,
-			Directories: dirs,
-		})
-	} else {
-		json.NewEncoder(w).Encode(CacheDirectoriesResponse{Enabled: true})
-	}
+	dirs := s.cache.ListDirectories()
+	json.NewEncoder(w).Encode(CacheDirectoriesResponse{
+		Enabled:     true,
+		Directories: dirs,
+	})
 }

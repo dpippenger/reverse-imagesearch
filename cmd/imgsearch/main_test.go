@@ -101,6 +101,18 @@ func TestRunErrors(t *testing.T) {
 	origArgs := os.Args
 	defer func() { os.Args = origArgs }()
 
+	t.Run("missing source flag returns error", func(t *testing.T) {
+		resetFlags()
+		os.Args = []string{"imgsearch", "-dir", "."}
+		err := run()
+		if err == nil {
+			t.Error("Expected error for missing source flag")
+		}
+		if !strings.Contains(err.Error(), "source flag is required") {
+			t.Errorf("Error should mention source flag, got: %v", err)
+		}
+	})
+
 	t.Run("non-existent source image", func(t *testing.T) {
 		resetFlags()
 		os.Args = []string{"imgsearch", "-source", "/nonexistent/image.jpg", "-dir", "."}

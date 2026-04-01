@@ -50,6 +50,7 @@ type Cache interface {
 	Stats() Stats
 	Close() error
 	Scan(dir string, callback func(ScanProgress)) error
+	ListDirectories() []DirectoryInfo
 }
 
 // BoltCache implements Cache using BoltDB
