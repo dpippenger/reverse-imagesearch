@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 
@@ -67,7 +68,7 @@ func run() error {
 		fmt.Println("       imgsearch -web [-port <port>]")
 		fmt.Println("\nOptions:")
 		flag.PrintDefaults()
-		os.Exit(1)
+		return fmt.Errorf("source flag is required")
 	}
 
 	// Load source image
@@ -83,6 +84,12 @@ func run() error {
 	}
 
 	fmt.Printf("Scanning directory: %s\n", *searchDir)
+
+	// Resolve source path for exclusion from results
+	absSource, err := filepath.Abs(*sourceFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not resolve source path: %v\n", err)
+	}
 
 	config := search.Config{
 		SearchDir: *searchDir,
@@ -109,6 +116,11 @@ func run() error {
 			return
 		}
 		if r.Match.Path == "" {
+			return
+		}
+
+		// Exclude the source image from results
+		if absMatch, err := filepath.Abs(r.Match.Path); err == nil && absMatch == absSource {
 			return
 		}
 
