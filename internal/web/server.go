@@ -8,11 +8,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +30,6 @@ var content embed.FS
 type searchState struct {
 	results      chan search.Result
 	cancel       context.CancelFunc
-	createdAt    time.Time
 	lastActivity time.Time
 	consuming    bool // true while a client is streaming results
 }
@@ -44,6 +43,15 @@ type Server struct {
 	allowedBasePath string      // Base path for file access (empty = user home)
 	cache           cache.Cache // Optional hash cache
 	done            chan struct{}
+}
+
+// effectiveBasePath returns the base directory that file access is restricted
+// to: the configured allowedBasePath, or the user's home directory.
+func (s *Server) effectiveBasePath() (string, error) {
+	if s.allowedBasePath != "" {
+		return s.allowedBasePath, nil
+	}
+	return os.UserHomeDir()
 }
 
 // validatePath checks if a path is within the allowed base directory and returns
@@ -67,15 +75,9 @@ func (s *Server) validatePath(requestedPath string) (string, bool) {
 		return "", false
 	}
 
-	// Get the allowed base path
-	basePath := s.allowedBasePath
-	if basePath == "" {
-		// Default to user home directory
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", false
-		}
-		basePath = home
+	basePath, err := s.effectiveBasePath()
+	if err != nil {
+		return "", false
 	}
 
 	absBase, err := filepath.Abs(filepath.Clean(basePath))
@@ -90,6 +92,17 @@ func (s *Server) validatePath(requestedPath string) (string, bool) {
 	}
 
 	return absPath, true
+}
+
+// cleanValidatedPath validates requestedPath via validatePath and applies
+// filepath.Clean to the result so static analysis (CodeQL) sees sanitization
+// on the value handlers use. Returns the cleaned path and whether it is allowed.
+func (s *Server) cleanValidatedPath(requestedPath string) (string, bool) {
+	validated, ok := s.validatePath(requestedPath)
+	if !ok {
+		return "", false
+	}
+	return filepath.Clean(validated), true
 }
 
 // sanitizeFilename removes potentially dangerous characters from a filename
@@ -118,6 +131,30 @@ func generateSearchID() string {
 	return hex.EncodeToString(b)
 }
 
+// sseSetup sets the response headers for Server-Sent Events and returns the
+// flusher. If streaming is not supported it writes an error response and
+// returns false.
+func sseSetup(w http.ResponseWriter) (http.Flusher, bool) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return nil, false
+	}
+	return flusher, true
+}
+
+// sendSSE marshals v and writes it as a single SSE data event, flushing it
+// to the client immediately.
+func sendSSE(w http.ResponseWriter, flusher http.Flusher, v interface{}) {
+	data, _ := json.Marshal(v)
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	flusher.Flush()
+}
+
 // BrowseResponse represents a directory listing
 type BrowseResponse struct {
 	Path    string        `json:"path"`
@@ -131,16 +168,6 @@ type BrowseEntry struct {
 	Name  string `json:"name"`
 	IsDir bool   `json:"isDir"`
 	Path  string `json:"path"`
-}
-
-// New creates a new web server that binds to localhost only (secure default).
-func New(port int) *Server {
-	return &Server{
-		port:     port,
-		bindAddr: "127.0.0.1",
-		searches: make(map[string]*searchState),
-		done:     make(chan struct{}),
-	}
 }
 
 // NewWithOptions creates a new web server with custom configuration.
@@ -157,45 +184,6 @@ func NewWithOptions(port int, bindAddr, basePath string) *Server {
 		allowedBasePath: basePath,
 		done:            make(chan struct{}),
 	}
-}
-
-// NewWithBasePath creates a new web server with a custom allowed base path.
-// This is useful for restricting file access to a specific directory.
-// Binds to localhost only for security.
-func NewWithBasePath(port int, basePath string) *Server {
-	return &Server{
-		port:            port,
-		bindAddr:        "127.0.0.1",
-		searches:        make(map[string]*searchState),
-		allowedBasePath: basePath,
-		done:            make(chan struct{}),
-	}
-}
-
-// NewWithCache creates a new web server with cache support.
-// cachePath: path to the BoltDB cache file (if empty, caching is disabled)
-func NewWithCache(port int, bindAddr, basePath, cachePath string) (*Server, error) {
-	if bindAddr == "" {
-		bindAddr = "127.0.0.1"
-	}
-
-	s := &Server{
-		port:            port,
-		bindAddr:        bindAddr,
-		searches:        make(map[string]*searchState),
-		allowedBasePath: basePath,
-		done:            make(chan struct{}),
-	}
-
-	if cachePath != "" {
-		c, err := cache.New(cachePath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open cache: %w", err)
-		}
-		s.cache = c
-	}
-
-	return s, nil
 }
 
 // SetCache sets the cache for the server.
@@ -329,20 +317,26 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse config
+	// Parse config, keeping defaults on parse failure
 	threshold := 70.0
 	if t := r.FormValue("threshold"); t != "" {
-		fmt.Sscanf(t, "%f", &threshold)
+		if v, err := strconv.ParseFloat(t, 64); err == nil {
+			threshold = v
+		}
 	}
 
 	workers := 0
 	if wVal := r.FormValue("workers"); wVal != "" {
-		fmt.Sscanf(wVal, "%d", &workers)
+		if v, err := strconv.Atoi(wVal); err == nil {
+			workers = v
+		}
 	}
 
 	topN := 0
 	if n := r.FormValue("topN"); n != "" {
-		fmt.Sscanf(n, "%d", &topN)
+		if v, err := strconv.Atoi(n); err == nil {
+			topN = v
+		}
 	}
 
 	searchDir := r.FormValue("dir")
@@ -350,14 +344,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		searchDir = "."
 	}
 
-	// Validate and clean path
-	validatedDir, ok := s.validatePath(searchDir)
+	cleanSearchDir, ok := s.cleanValidatedPath(searchDir)
 	if !ok {
 		json.NewEncoder(w).Encode(map[string]string{"error": "Access denied: path outside allowed directory"})
 		return
 	}
-	// Apply filepath.Clean at point of use to satisfy static analysis (CodeQL)
-	cleanSearchDir := filepath.Clean(validatedDir)
 
 	config := search.Config{
 		SearchDir: cleanSearchDir,
@@ -374,13 +365,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	resultChan := make(chan search.Result, 100)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	now := time.Now()
 	s.searchesMu.Lock()
 	s.searches[searchID] = &searchState{
 		results:      resultChan,
 		cancel:       cancel,
-		createdAt:    now,
-		lastActivity: now,
+		lastActivity: time.Now(),
 	}
 	s.searchesMu.Unlock()
 
@@ -417,17 +406,17 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set headers for SSE
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	// Note: CORS header removed for security - SSE only works same-origin
-
-	flusher, ok := w.(http.Flusher)
+	flusher, ok := sseSetup(w)
 	if !ok {
-		http.Error(w, "SSE not supported", http.StatusInternalServerError)
 		return
 	}
+
+	// Remove the search from the map when streaming ends
+	defer func() {
+		s.searchesMu.Lock()
+		delete(s.searches, searchID)
+		s.searchesMu.Unlock()
+	}()
 
 	// Stream results, detecting client disconnect via request context
 	clientCtx := r.Context()
@@ -436,11 +425,9 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 		select {
 		case result, chanOpen := <-state.results:
 			if !chanOpen {
-				goto cleanup
+				return
 			}
-			data, _ := json.Marshal(result)
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
+			sendSSE(w, flusher, result)
 			// Throttle lastActivity updates — cleanup checks every 30s
 			if time.Since(lastUpdate) > 10*time.Second {
 				s.searchesMu.Lock()
@@ -455,14 +442,9 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 				for range state.results {
 				}
 			}()
-			goto cleanup
+			return
 		}
 	}
-
-cleanup:
-	s.searchesMu.Lock()
-	delete(s.searches, searchID)
-	s.searchesMu.Unlock()
 }
 
 func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
@@ -472,14 +454,11 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate and get cleaned path
-	validatedPath, ok := s.validatePath(path)
+	cleanPath, ok := s.cleanValidatedPath(path)
 	if !ok {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
-	// Apply filepath.Clean at point of use to satisfy static analysis (CodeQL)
-	cleanPath := filepath.Clean(validatedPath)
 
 	thumb, err := imgutil.GenerateThumbnail(cleanPath, 200)
 	if err != nil {
@@ -502,28 +481,16 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 
 	path := r.URL.Query().Get("path")
 	if path == "" {
-		// Start at allowed base directory or home directory
-		if s.allowedBasePath != "" {
-			path = s.allowedBasePath
-		} else {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				cwd, _ := os.Getwd()
-				path = cwd
-			} else {
-				path = home
-			}
-		}
+		// Start at the effective base directory; if the lookup fails,
+		// validatePath below rejects the request anyway.
+		path, _ = s.effectiveBasePath()
 	}
 
-	// Validate and get cleaned path
-	validatedPath, ok := s.validatePath(path)
+	cleanPath, ok := s.cleanValidatedPath(path)
 	if !ok {
 		json.NewEncoder(w).Encode(BrowseResponse{Error: "Access denied: path outside allowed directory"})
 		return
 	}
-	// Apply filepath.Clean at point of use to satisfy static analysis (CodeQL)
-	cleanPath := filepath.Clean(validatedPath)
 
 	// Check if path exists and is a directory
 	info, err := os.Stat(cleanPath)
@@ -589,14 +556,11 @@ func (s *Server) handleExif(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate and get cleaned path
-	validatedPath, ok := s.validatePath(path)
+	cleanPath, ok := s.cleanValidatedPath(path)
 	if !ok {
 		json.NewEncoder(w).Encode(exif.Data{Error: "Access denied"})
 		return
 	}
-	// Apply filepath.Clean at point of use to satisfy static analysis (CodeQL)
-	cleanPath := filepath.Clean(validatedPath)
 
 	data := exif.Extract(cleanPath)
 	json.NewEncoder(w).Encode(data)
@@ -609,14 +573,11 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate and get cleaned path
-	validatedPath, ok := s.validatePath(path)
+	cleanPath, ok := s.cleanValidatedPath(path)
 	if !ok {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
-	// Apply filepath.Clean at point of use to satisfy static analysis (CodeQL)
-	cleanPath := filepath.Clean(validatedPath)
 
 	// Verify the file exists and is an image
 	if !imgutil.IsImageFile(cleanPath) {
@@ -631,7 +592,6 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	// Get file info for Content-Length and filename
 	fileInfo, err := file.Stat()
 	if err != nil {
 		http.Error(w, "Cannot read file info", http.StatusInternalServerError)
@@ -642,10 +602,9 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	filename := sanitizeFilename(filepath.Base(cleanPath))
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", fileInfo.Size()))
 
-	// Stream the file
-	io.Copy(w, file)
+	// ServeContent sets Content-Length and handles range requests
+	http.ServeContent(w, r, "", fileInfo.ModTime(), file)
 }
 
 // CacheStatsResponse holds cache statistics for the API
@@ -703,36 +662,23 @@ func (s *Server) handleCacheScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate path
-	validatedDir, ok := s.validatePath(dir)
+	cleanDir, ok := s.cleanValidatedPath(dir)
 	if !ok {
 		http.Error(w, "Access denied: path outside allowed directory", http.StatusForbidden)
 		return
 	}
-	cleanDir := filepath.Clean(validatedDir)
 
-	// Set headers for SSE
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	flusher, ok := w.(http.Flusher)
+	flusher, ok := sseSetup(w)
 	if !ok {
-		http.Error(w, "SSE not supported", http.StatusInternalServerError)
 		return
 	}
 
 	// Run scan and stream progress
 	err := s.cache.Scan(cleanDir, func(progress cache.ScanProgress) {
-		data, _ := json.Marshal(progress)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
+		sendSSE(w, flusher, progress)
 	})
-
 	if err != nil {
-		errData, _ := json.Marshal(cache.ScanProgress{Error: err.Error(), Done: true})
-		fmt.Fprintf(w, "data: %s\n\n", errData)
-		flusher.Flush()
+		sendSSE(w, flusher, cache.ScanProgress{Error: err.Error(), Done: true})
 	}
 }
 

@@ -23,26 +23,8 @@ import (
 	"imgsearch/internal/testutil"
 )
 
-func TestNew(t *testing.T) {
-	t.Run("creates server with correct port", func(t *testing.T) {
-		server := New(8080)
-
-		if server.port != 8080 {
-			t.Errorf("port = %d, want 8080", server.port)
-		}
-	})
-
-	t.Run("initializes searches map", func(t *testing.T) {
-		server := New(8080)
-
-		if server.searches == nil {
-			t.Error("searches map should be initialized")
-		}
-	})
-}
-
 func TestHandleIndex(t *testing.T) {
-	server := New(8080)
+	server := NewWithOptions(8080, "", "")
 
 	t.Run("GET / returns HTML", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/", nil)
@@ -80,7 +62,7 @@ func TestHandleIndex(t *testing.T) {
 }
 
 func TestHandleAppJS(t *testing.T) {
-	server := New(8080)
+	server := NewWithOptions(8080, "", "")
 
 	t.Run("GET /app.js returns JavaScript", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/app.js", nil)
@@ -107,7 +89,7 @@ func TestHandleAppJS(t *testing.T) {
 
 func TestHandleBrowse(t *testing.T) {
 	// Use /tmp as base path for tests since temp files are created there
-	server := NewWithBasePath(8080, os.TempDir())
+	server := NewWithOptions(8080, "", os.TempDir())
 
 	t.Run("browse with valid directory", func(t *testing.T) {
 		tmpDir, err := os.MkdirTemp("", "browse-test-*")
@@ -261,7 +243,7 @@ func TestHandleBrowse(t *testing.T) {
 
 func TestHandleExif(t *testing.T) {
 	// Use /tmp as base path for tests since temp files are created there
-	server := NewWithBasePath(8080, os.TempDir())
+	server := NewWithOptions(8080, "", os.TempDir())
 
 	t.Run("exif with valid image", func(t *testing.T) {
 		img := testutil.SolidColorImage(100, 50, color.White)
@@ -312,7 +294,7 @@ func TestHandleExif(t *testing.T) {
 
 func TestHandleThumbnail(t *testing.T) {
 	// Use /tmp as base path for tests since temp files are created there
-	server := NewWithBasePath(8080, os.TempDir())
+	server := NewWithOptions(8080, "", os.TempDir())
 
 	t.Run("thumbnail with valid image", func(t *testing.T) {
 		img := testutil.SolidColorImage(200, 200, color.RGBA{0, 0, 255, 255})
@@ -373,7 +355,7 @@ func TestHandleThumbnail(t *testing.T) {
 
 func TestHandleDownload(t *testing.T) {
 	// Use /tmp as base path for tests since temp files are created there
-	server := NewWithBasePath(8080, os.TempDir())
+	server := NewWithOptions(8080, "", os.TempDir())
 
 	t.Run("download with valid image", func(t *testing.T) {
 		img := testutil.SolidColorImage(100, 100, color.White)
@@ -458,7 +440,7 @@ func TestHandleDownload(t *testing.T) {
 
 func TestHandleSearch(t *testing.T) {
 	// Use /tmp as base path for tests since temp files are created there
-	server := NewWithBasePath(8080, os.TempDir())
+	server := NewWithOptions(8080, "", os.TempDir())
 
 	t.Run("search with GET returns 405", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/search", nil)
@@ -627,7 +609,7 @@ func TestHandleSearch(t *testing.T) {
 }
 
 func TestHandleResults(t *testing.T) {
-	server := New(8080)
+	server := NewWithOptions(8080, "", "")
 
 	t.Run("results with invalid searchId returns 404", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/results/invalid-id", nil)
@@ -642,7 +624,7 @@ func TestHandleResults(t *testing.T) {
 	})
 
 	t.Run("results with valid searchId streams SSE", func(t *testing.T) {
-		server := New(8080)
+		server := NewWithOptions(8080, "", "")
 
 		// Create a search result channel and register it
 		searchID := "test-search-123"
@@ -653,7 +635,6 @@ func TestHandleResults(t *testing.T) {
 		server.searches[searchID] = &searchState{
 			results:      resultChan,
 			cancel:       cancel,
-			createdAt:    now,
 			lastActivity: now,
 		}
 		server.searchesMu.Unlock()
@@ -696,7 +677,7 @@ func TestHandleResults(t *testing.T) {
 	})
 
 	t.Run("results handles client disconnect", func(t *testing.T) {
-		server := New(8080)
+		server := NewWithOptions(8080, "", "")
 
 		searchID := "test-disconnect-456"
 		resultChan := make(chan search.Result, 10)
@@ -706,7 +687,6 @@ func TestHandleResults(t *testing.T) {
 		server.searches[searchID] = &searchState{
 			results:      resultChan,
 			cancel:       cancel,
-			createdAt:    now,
 			lastActivity: now,
 		}
 		server.searchesMu.Unlock()
@@ -797,7 +777,7 @@ func TestBrowseEntry(t *testing.T) {
 
 func TestHandleBrowseSorting(t *testing.T) {
 	// Use /tmp as base path for tests since temp files are created there
-	server := NewWithBasePath(8080, os.TempDir())
+	server := NewWithOptions(8080, "", os.TempDir())
 
 	t.Run("browse sorts directories before files", func(t *testing.T) {
 		tmpDir, err := os.MkdirTemp("", "browse-sort-*")
@@ -883,7 +863,7 @@ func TestHandleBrowseSorting(t *testing.T) {
 
 func TestHandleSearchEdgeCases(t *testing.T) {
 	// Use /tmp as base path for tests since temp files are created there
-	server := NewWithBasePath(8080, os.TempDir())
+	server := NewWithOptions(8080, "", os.TempDir())
 
 	t.Run("search with invalid multipart form", func(t *testing.T) {
 		// Send a POST with invalid content type
@@ -934,7 +914,7 @@ func TestHandleSearchEdgeCases(t *testing.T) {
 
 func TestHandleDownloadEdgeCases(t *testing.T) {
 	// Use /tmp as base path for tests since temp files are created there
-	server := NewWithBasePath(8080, os.TempDir())
+	server := NewWithOptions(8080, "", os.TempDir())
 
 	t.Run("download with unreadable file returns error", func(t *testing.T) {
 		img := testutil.SolidColorImage(100, 100, color.White)
@@ -963,7 +943,7 @@ func TestHandleDownloadEdgeCases(t *testing.T) {
 
 func TestHandleThumbnailEdgeCases(t *testing.T) {
 	// Use /tmp as base path for tests since temp files are created there
-	server := NewWithBasePath(8080, os.TempDir())
+	server := NewWithOptions(8080, "", os.TempDir())
 
 	t.Run("thumbnail with corrupt JPEG", func(t *testing.T) {
 		tmpFile, err := os.CreateTemp("", "corrupt-*.jpg")
@@ -989,7 +969,7 @@ func TestHandleThumbnailEdgeCases(t *testing.T) {
 
 // Tests for security helper functions
 func TestValidatePath(t *testing.T) {
-	server := NewWithBasePath(8080, os.TempDir())
+	server := NewWithOptions(8080, "", os.TempDir())
 
 	t.Run("allows path within base directory", func(t *testing.T) {
 		tmpDir, err := os.MkdirTemp("", "pathtest-*")
@@ -1038,7 +1018,7 @@ func TestValidatePath(t *testing.T) {
 	t.Run("rejects similar prefix outside base", func(t *testing.T) {
 		// If base is /home/user, reject /home/user2
 		// This tests the trailing separator check
-		server := NewWithBasePath(8080, "/home/user")
+		server := NewWithOptions(8080, "", "/home/user")
 		if _, ok := server.validatePath("/home/user2"); ok {
 			t.Error("Similar prefix path should be rejected")
 		}
@@ -1102,28 +1082,6 @@ func TestGenerateSearchID(t *testing.T) {
 	})
 }
 
-func TestNewWithBasePath(t *testing.T) {
-	t.Run("creates server with custom base path", func(t *testing.T) {
-		server := NewWithBasePath(8080, "/custom/path")
-		if server.port != 8080 {
-			t.Errorf("port = %d, want 8080", server.port)
-		}
-		if server.allowedBasePath != "/custom/path" {
-			t.Errorf("allowedBasePath = %q, want /custom/path", server.allowedBasePath)
-		}
-		if server.bindAddr != "127.0.0.1" {
-			t.Errorf("bindAddr = %q, want 127.0.0.1", server.bindAddr)
-		}
-	})
-
-	t.Run("initializes searches map", func(t *testing.T) {
-		server := NewWithBasePath(8080, "/custom/path")
-		if server.searches == nil {
-			t.Error("searches map should be initialized")
-		}
-	})
-}
-
 func TestNewWithOptions(t *testing.T) {
 	t.Run("creates server with all options", func(t *testing.T) {
 		server := NewWithOptions(8080, "0.0.0.0", "/custom/path")
@@ -1153,16 +1111,9 @@ func TestNewWithOptions(t *testing.T) {
 	})
 }
 
-func TestNewDefaultsToLocalhost(t *testing.T) {
-	server := New(8080)
-	if server.bindAddr != "127.0.0.1" {
-		t.Errorf("bindAddr = %q, want 127.0.0.1 (secure default)", server.bindAddr)
-	}
-}
-
 func TestPathTraversalPrevention(t *testing.T) {
 	// Integration test for path traversal prevention across endpoints
-	server := NewWithBasePath(8080, os.TempDir())
+	server := NewWithOptions(8080, "", os.TempDir())
 
 	t.Run("thumbnail rejects path traversal", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/thumbnail?path=/etc/passwd", nil)
@@ -1211,7 +1162,7 @@ func TestPathTraversalPrevention(t *testing.T) {
 
 func TestHandleCacheStats(t *testing.T) {
 	t.Run("returns disabled when no cache", func(t *testing.T) {
-		server := New(8080)
+		server := NewWithOptions(8080, "", "")
 
 		req := httptest.NewRequest("GET", "/api/cache/stats", nil)
 		w := httptest.NewRecorder()
@@ -1232,7 +1183,7 @@ func TestHandleCacheStats(t *testing.T) {
 	})
 
 	t.Run("returns stats when cache is enabled", func(t *testing.T) {
-		server := New(8080)
+		server := NewWithOptions(8080, "", "")
 
 		// Create a cache
 		cacheDir := t.TempDir()
@@ -1257,7 +1208,7 @@ func TestHandleCacheStats(t *testing.T) {
 	})
 
 	t.Run("calculates hit rate correctly", func(t *testing.T) {
-		server := New(8080)
+		server := NewWithOptions(8080, "", "")
 
 		cacheDir := t.TempDir()
 		c, err := cache.New(filepath.Join(cacheDir, "cache.db"))
@@ -1290,7 +1241,7 @@ func TestHandleCacheStats(t *testing.T) {
 
 func TestHandleCacheClear(t *testing.T) {
 	t.Run("returns error when no cache", func(t *testing.T) {
-		server := New(8080)
+		server := NewWithOptions(8080, "", "")
 
 		req := httptest.NewRequest("POST", "/api/cache/clear", nil)
 		w := httptest.NewRecorder()
@@ -1309,7 +1260,7 @@ func TestHandleCacheClear(t *testing.T) {
 	})
 
 	t.Run("clears cache successfully", func(t *testing.T) {
-		server := New(8080)
+		server := NewWithOptions(8080, "", "")
 
 		cacheDir := t.TempDir()
 		c, err := cache.New(filepath.Join(cacheDir, "cache.db"))
@@ -1333,7 +1284,7 @@ func TestHandleCacheClear(t *testing.T) {
 	})
 
 	t.Run("rejects GET requests", func(t *testing.T) {
-		server := New(8080)
+		server := NewWithOptions(8080, "", "")
 
 		req := httptest.NewRequest("GET", "/api/cache/clear", nil)
 		w := httptest.NewRecorder()
@@ -1349,7 +1300,7 @@ func TestHandleCacheClear(t *testing.T) {
 
 func TestHandleCacheDirectories(t *testing.T) {
 	t.Run("returns disabled when no cache", func(t *testing.T) {
-		server := New(8080)
+		server := NewWithOptions(8080, "", "")
 
 		req := httptest.NewRequest("GET", "/api/cache/directories", nil)
 		w := httptest.NewRecorder()
@@ -1365,7 +1316,7 @@ func TestHandleCacheDirectories(t *testing.T) {
 	})
 
 	t.Run("returns directories with cache", func(t *testing.T) {
-		server := New(8080)
+		server := NewWithOptions(8080, "", "")
 
 		cacheDir := t.TempDir()
 		c, err := cache.New(filepath.Join(cacheDir, "cache.db"))
@@ -1413,7 +1364,7 @@ func TestHandleCacheDirectories(t *testing.T) {
 
 func TestHandleCacheScan(t *testing.T) {
 	t.Run("returns error when no cache", func(t *testing.T) {
-		server := NewWithBasePath(8080, os.TempDir())
+		server := NewWithOptions(8080, "", os.TempDir())
 
 		req := httptest.NewRequest("POST", "/api/cache/scan?dir="+os.TempDir(), nil)
 		w := httptest.NewRecorder()
@@ -1427,7 +1378,7 @@ func TestHandleCacheScan(t *testing.T) {
 	})
 
 	t.Run("rejects PUT requests", func(t *testing.T) {
-		server := New(8080)
+		server := NewWithOptions(8080, "", "")
 
 		req := httptest.NewRequest("PUT", "/api/cache/scan", nil)
 		w := httptest.NewRecorder()
@@ -1441,7 +1392,7 @@ func TestHandleCacheScan(t *testing.T) {
 	})
 
 	t.Run("requires directory parameter", func(t *testing.T) {
-		server := New(8080)
+		server := NewWithOptions(8080, "", "")
 
 		cacheDir := t.TempDir()
 		c, _ := cache.New(filepath.Join(cacheDir, "cache.db"))
@@ -1460,7 +1411,7 @@ func TestHandleCacheScan(t *testing.T) {
 	})
 
 	t.Run("rejects path traversal", func(t *testing.T) {
-		server := NewWithBasePath(8080, os.TempDir())
+		server := NewWithOptions(8080, "", os.TempDir())
 
 		cacheDir := t.TempDir()
 		c, _ := cache.New(filepath.Join(cacheDir, "cache.db"))
@@ -1489,7 +1440,7 @@ func TestHandleCacheScan(t *testing.T) {
 		}
 		defer cleanup()
 
-		server := NewWithBasePath(8080, imgDir)
+		server := NewWithOptions(8080, "", imgDir)
 
 		cacheDir := t.TempDir()
 		c, _ := cache.New(filepath.Join(cacheDir, "cache.db"))
@@ -1523,15 +1474,17 @@ func TestHandleCacheScan(t *testing.T) {
 	})
 }
 
-func TestNewWithCache(t *testing.T) {
-	t.Run("creates server with cache", func(t *testing.T) {
-		cacheDir := t.TempDir()
-		cachePath := filepath.Join(cacheDir, "cache.db")
+func TestSetCache(t *testing.T) {
+	t.Run("sets cache on server", func(t *testing.T) {
+		cachePath := filepath.Join(t.TempDir(), "cache.db")
 
-		server, err := NewWithCache(8080, "127.0.0.1", os.TempDir(), cachePath)
+		c, err := cache.New(cachePath)
 		if err != nil {
-			t.Fatalf("Failed to create server: %v", err)
+			t.Fatalf("Failed to create cache: %v", err)
 		}
+
+		server := NewWithOptions(8080, "127.0.0.1", os.TempDir())
+		server.SetCache(c)
 		defer server.Close()
 
 		if server.cache == nil {
@@ -1539,37 +1492,9 @@ func TestNewWithCache(t *testing.T) {
 		}
 	})
 
-	t.Run("creates server without cache when path is empty", func(t *testing.T) {
-		server, err := NewWithCache(8080, "127.0.0.1", os.TempDir(), "")
-		if err != nil {
-			t.Fatalf("Failed to create server: %v", err)
-		}
-		defer server.Close()
-
-		if server.cache != nil {
-			t.Error("Expected cache to be nil when path is empty")
-		}
-	})
-
-	t.Run("returns error for invalid cache path", func(t *testing.T) {
-		_, err := NewWithCache(8080, "127.0.0.1", os.TempDir(), "/dev/null/invalid/cache.db")
-		if err == nil {
+	t.Run("cache creation fails for invalid path", func(t *testing.T) {
+		if _, err := cache.New("/dev/null/invalid/cache.db"); err == nil {
 			t.Error("Expected error for invalid cache path")
-		}
-	})
-
-	t.Run("defaults to localhost when bindAddr is empty", func(t *testing.T) {
-		cacheDir := t.TempDir()
-		cachePath := filepath.Join(cacheDir, "cache.db")
-
-		server, err := NewWithCache(8080, "", os.TempDir(), cachePath)
-		if err != nil {
-			t.Fatalf("Failed to create server: %v", err)
-		}
-		defer server.Close()
-
-		if server.bindAddr != "127.0.0.1" {
-			t.Errorf("bindAddr = %q, want 127.0.0.1", server.bindAddr)
 		}
 	})
 }
@@ -1579,10 +1504,13 @@ func TestServerClose(t *testing.T) {
 		cacheDir := t.TempDir()
 		cachePath := filepath.Join(cacheDir, "cache.db")
 
-		server, err := NewWithCache(8080, "127.0.0.1", os.TempDir(), cachePath)
+		c, err := cache.New(cachePath)
 		if err != nil {
-			t.Fatalf("Failed to create server: %v", err)
+			t.Fatalf("Failed to create cache: %v", err)
 		}
+
+		server := NewWithOptions(8080, "127.0.0.1", os.TempDir())
+		server.SetCache(c)
 
 		if err := server.Close(); err != nil {
 			t.Errorf("Close() returned error: %v", err)
@@ -1590,7 +1518,7 @@ func TestServerClose(t *testing.T) {
 	})
 
 	t.Run("succeeds when no cache", func(t *testing.T) {
-		server := New(8080)
+		server := NewWithOptions(8080, "", "")
 
 		if err := server.Close(); err != nil {
 			t.Errorf("Close() returned error: %v", err)
