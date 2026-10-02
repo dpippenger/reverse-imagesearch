@@ -180,7 +180,7 @@ Security is enforced through localhost-only binding by default, path traversal p
 
 #### Acceptance Criteria
 
-1. THE Dockerfile SHALL use a multi-stage build: golang:1.24-alpine for building, alpine:latest for runtime.
+1. THE Dockerfile SHALL use a multi-stage build: golang:1.25-alpine for building, alpine:latest for runtime.
 2. THE Dockerfile SHALL build with `CGO_ENABLED=0` and `-ldflags="-s -w"` for a static, stripped binary.
 3. THE container SHALL default to web mode bound to `0.0.0.0` on port 9183.
 4. THE container SHALL run as a non-root `imgsearch` user.
@@ -317,7 +317,7 @@ stateDiagram-v2
 
 ## Constraints
 
-- **Go 1.23+** with toolchain 1.24.11; no CGo required for production builds.
+- **Go 1.25+**; no CGo required for production builds.
 - **Three external dependencies only**: `github.com/nfnt/resize` (image resizing), `github.com/rwcarlsen/goexif/exif` (EXIF extraction), `go.etcd.io/bbolt` (persistent cache). Do not introduce additional dependencies.
 - **JPEG-only indexing**: `IsImageFile()` filters to `.jpg`/`.jpeg` only. The image decoder supports PNG and GIF via blank imports, but directory scanning does not index them.
 - **Embedded web assets**: `template.html` and `app.js` must be embedded via `go:embed`; no external static file serving.
