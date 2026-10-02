@@ -92,10 +92,11 @@ func run() error {
 	}
 
 	config := search.Config{
-		SearchDir: *searchDir,
-		Threshold: *threshold,
-		Workers:   *workers,
-		TopN:      *topN,
+		SearchDir:   *searchDir,
+		Threshold:   *threshold,
+		Workers:     *workers,
+		TopN:        *topN,
+		ExcludePath: absSource,
 	}
 	if hashCache != nil {
 		config.Cache = hashCache
@@ -116,11 +117,6 @@ func run() error {
 			return
 		}
 		if r.Match.Path == "" {
-			return
-		}
-
-		// Exclude the source image from results
-		if absMatch, err := filepath.Abs(r.Match.Path); err == nil && absMatch == absSource {
 			return
 		}
 

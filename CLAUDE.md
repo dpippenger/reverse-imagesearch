@@ -140,6 +140,7 @@ type Config struct {
     Workers   int
     TopN      int
     Cache     cache.Cache // Optional hash cache
+    ExcludePath string    // Absolute path to skip (CLI passes the source image)
 }
 
 // internal/search

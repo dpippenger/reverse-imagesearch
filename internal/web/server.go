@@ -385,6 +385,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer close(resultChan)
 		search.Run(ctx, sourceData, config, func(result search.Result) {
+			// Skip thumbnail work once nobody is listening
+			if ctx.Err() != nil {
+				return
+			}
 			payload := sseResult{Result: result}
 			if result.Match.Path != "" {
 				// Thumbnail errors are ignored; the browser falls back

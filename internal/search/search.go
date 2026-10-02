@@ -2,8 +2,10 @@ package search
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"sync"
@@ -24,6 +26,10 @@ type Config struct {
 	Workers   int
 	TopN      int
 	Cache     cache.Cache // Optional hash cache for faster repeated searches
+
+	// ExcludePath is an absolute path skipped during the search, typically
+	// the source image, so it never occupies a TopN slot.
+	ExcludePath string
 }
 
 // Result is sent for each match found
@@ -78,7 +84,12 @@ func Run(ctx context.Context, sourceData hash.Data, config Config, callback func
 	var buffered []imgutil.Match
 
 	processImage := func(path string) {
-		data := hashImage(path, config.Cache)
+		var data hash.Data
+		if isExcluded(path, config.ExcludePath) {
+			data.Error = errExcluded
+		} else {
+			data = hashImage(path, config.Cache)
+		}
 
 		mu.Lock()
 		scanned++
@@ -152,16 +163,16 @@ sendLoop:
 	finalScanned := scanned
 	mu.Unlock()
 
-	if config.TopN > 0 {
-		emitTopN(buffered, config.TopN, totalImages, finalScanned, callback)
+	if config.TopN > 0 && ctx.Err() == nil {
+		emitTopN(ctx, buffered, config.TopN, totalImages, finalScanned, callback)
 	}
 
 	callback(Result{Done: true, Total: totalImages, Scanned: finalScanned})
 }
 
 // emitTopN sorts buffered matches by similarity (descending) and emits the
-// best n.
-func emitTopN(matches []imgutil.Match, n, total, scanned int, callback func(Result)) {
+// best n, stopping early if ctx is cancelled.
+func emitTopN(ctx context.Context, matches []imgutil.Match, n, total, scanned int, callback func(Result)) {
 	sort.Slice(matches, func(i, j int) bool {
 		return matches[i].Similarity > matches[j].Similarity
 	})
@@ -169,12 +180,28 @@ func emitTopN(matches []imgutil.Match, n, total, scanned int, callback func(Resu
 		matches = matches[:n]
 	}
 	for _, m := range matches {
+		if ctx.Err() != nil {
+			return
+		}
 		callback(Result{
 			Match:   m,
 			Total:   total,
 			Scanned: scanned,
 		})
 	}
+}
+
+// errExcluded marks the excluded path so workers count it as scanned
+// without treating it as a match.
+var errExcluded = errors.New("excluded from search")
+
+// isExcluded reports whether path resolves to the absolute exclude path.
+func isExcluded(path, exclude string) bool {
+	if exclude == "" {
+		return false
+	}
+	abs, err := filepath.Abs(path)
+	return err == nil && abs == exclude
 }
 
 // hashImage loads and hashes the image at path, consulting the cache when

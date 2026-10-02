@@ -565,3 +565,59 @@ func TestRunTopN(t *testing.T) {
 		}
 	})
 }
+
+func TestRunExcludePath(t *testing.T) {
+	dir, sourceData, expected := gradedSearchDir(t)
+
+	excluded, err := filepath.Abs(expected[0].Path)
+	if err != nil {
+		t.Fatalf("Failed to resolve path: %v", err)
+	}
+
+	matches, _, done := collectResults(sourceData, Config{
+		SearchDir:   dir,
+		Threshold:   0,
+		Workers:     4,
+		TopN:        1,
+		ExcludePath: excluded,
+	})
+
+	if len(matches) != 1 {
+		t.Fatalf("got %d matches, want 1", len(matches))
+	}
+	if abs, _ := filepath.Abs(matches[0].Match.Path); abs == excluded {
+		t.Errorf("excluded path %s was returned", excluded)
+	}
+	if matches[0].Match.Similarity != expected[1].Similarity {
+		t.Errorf("similarity = %.2f, want next best %.2f", matches[0].Match.Similarity, expected[1].Similarity)
+	}
+	if len(done) != 1 || done[0].Scanned != len(expected) {
+		t.Errorf("done = %+v, want one Done with Scanned=%d", done, len(expected))
+	}
+}
+
+func TestRunTopNCancelled(t *testing.T) {
+	dir, sourceData, _ := gradedSearchDir(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var matches, done int
+	var mu sync.Mutex
+	Run(ctx, sourceData, Config{SearchDir: dir, Threshold: 0, Workers: 2, TopN: 3}, func(r Result) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.Done {
+			done++
+		} else if r.Match.Path != "" {
+			matches++
+		}
+	})
+
+	if matches != 0 {
+		t.Errorf("cancelled search emitted %d matches, want 0", matches)
+	}
+	if done != 1 {
+		t.Errorf("got %d Done results, want 1", done)
+	}
+}
