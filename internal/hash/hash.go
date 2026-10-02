@@ -3,6 +3,7 @@ package hash
 import (
 	"fmt"
 	"image"
+	"image/color"
 	"math"
 	"math/bits"
 	"sort"
@@ -27,6 +28,12 @@ func initDCTCosines() {
 	}
 }
 
+// luminance converts a color to grayscale using the luminosity method.
+func luminance(c color.Color) float64 {
+	r, g, b, _ := c.RGBA()
+	return 0.299*float64(r>>8) + 0.587*float64(g>>8) + 0.114*float64(b>>8)
+}
+
 // ColorHistogram computes a simple color histogram for additional comparison
 type ColorHistogram struct {
 	R, G, B [16]float64 // 16 bins per channel
@@ -45,17 +52,15 @@ type Data struct {
 // Perceptual computes a perceptual hash (pHash) for an image.
 // This hash is resistant to scaling and minor modifications.
 func Perceptual(img image.Image) uint64 {
-	// Step 1: Reduce size to 32x32 for DCT, then we'll use 8x8 for the hash
-	smallImg := resize.Resize(32, 32, img, resize.Lanczos3)
+	// Step 1: Reduce size to dctSize x dctSize for DCT, then we'll use 8x8 for the hash
+	smallImg := resize.Resize(dctSize, dctSize, img, resize.Lanczos3)
 
 	// Step 2: Convert to grayscale
-	gray := make([][]float64, 32)
-	for y := 0; y < 32; y++ {
-		gray[y] = make([]float64, 32)
-		for x := 0; x < 32; x++ {
-			r, g, b, _ := smallImg.At(x, y).RGBA()
-			// Convert to grayscale using luminosity method
-			gray[y][x] = 0.299*float64(r>>8) + 0.587*float64(g>>8) + 0.114*float64(b>>8)
+	gray := make([][]float64, dctSize)
+	for y := 0; y < dctSize; y++ {
+		gray[y] = make([]float64, dctSize)
+		for x := 0; x < dctSize; x++ {
+			gray[y][x] = luminance(smallImg.At(x, y))
 		}
 	}
 
@@ -64,7 +69,7 @@ func Perceptual(img image.Image) uint64 {
 
 	// Step 4: Reduce the DCT - keep top-left 8x8 (excluding first element which is DC component)
 	// These represent the lowest frequencies
-	var dctValues []float64
+	dctValues := make([]float64, 0, 63)
 	for y := 0; y < 8; y++ {
 		for x := 0; x < 8; x++ {
 			if x == 0 && y == 0 {
@@ -74,24 +79,17 @@ func Perceptual(img image.Image) uint64 {
 		}
 	}
 
-	// Step 5: Calculate median
-	sortedDCT := make([]float64, len(dctValues))
-	copy(sortedDCT, dctValues)
-	sort.Float64s(sortedDCT)
-	median := sortedDCT[len(sortedDCT)/2]
+	// Step 5: Calculate median (sort a copy so dctValues keeps its bit order)
+	sorted := make([]float64, len(dctValues))
+	copy(sorted, dctValues)
+	sort.Float64s(sorted)
+	median := sorted[len(sorted)/2]
 
-	// Step 6: Compute hash - set bit to 1 if value > median
+	// Step 6: Compute hash - bit i is set if the i-th kept value > median
 	var hash uint64
-	bitIndex := 0
-	for y := 0; y < 8; y++ {
-		for x := 0; x < 8; x++ {
-			if x == 0 && y == 0 {
-				continue
-			}
-			if dct[y][x] > median {
-				hash |= 1 << bitIndex
-			}
-			bitIndex++
+	for i, v := range dctValues {
+		if v > median {
+			hash |= 1 << i
 		}
 	}
 
@@ -148,8 +146,7 @@ func Average(img image.Image) uint64 {
 	idx := 0
 	for y := 0; y < 8; y++ {
 		for x := 0; x < 8; x++ {
-			r, g, b, _ := smallImg.At(x, y).RGBA()
-			gray := 0.299*float64(r>>8) + 0.587*float64(g>>8) + 0.114*float64(b>>8)
+			gray := luminance(smallImg.At(x, y))
 			pixels[idx] = gray
 			total += gray
 			idx++
@@ -180,8 +177,7 @@ func Difference(img image.Image) uint64 {
 	for y := 0; y < 8; y++ {
 		gray[y] = make([]float64, 9)
 		for x := 0; x < 9; x++ {
-			r, g, b, _ := smallImg.At(x, y).RGBA()
-			gray[y][x] = 0.299*float64(r>>8) + 0.587*float64(g>>8) + 0.114*float64(b>>8)
+			gray[y][x] = luminance(smallImg.At(x, y))
 		}
 	}
 
@@ -243,7 +239,8 @@ func ComputeColorHistogram(img image.Image) ColorHistogram {
 	return hist
 }
 
-// HistogramSimilarity computes similarity between two histograms using correlation
+// HistogramSimilarity computes similarity between two histograms using
+// histogram intersection (sum of per-bin minimums).
 func HistogramSimilarity(h1, h2 ColorHistogram) float64 {
 	var similarity float64
 	for i := 0; i < 16; i++ {

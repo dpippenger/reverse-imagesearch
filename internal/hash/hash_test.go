@@ -3,6 +3,7 @@ package hash
 import (
 	"image"
 	"image/color"
+	"math"
 	"testing"
 
 	"imgsearch/internal/testutil"
@@ -454,4 +455,89 @@ func BenchmarkComputeColorHistogram(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ComputeColorHistogram(img)
 	}
+}
+
+// referenceDCT is a straightforward O(n^4) 2D DCT-II used as a correctness
+// oracle for computeDCT. It mirrors the pHash normalization: output[u][v] =
+// cu * cv * 2/size * sum over x,y of input[y][x]*cos(u,x)*cos(v,y).
+func referenceDCT(input [][]float64) [][]float64 {
+	size := len(input)
+	cos := func(i, j int) float64 {
+		return math.Cos(math.Pi * float64(i) * (float64(j) + 0.5) / float64(size))
+	}
+	output := make([][]float64, size)
+	for u := 0; u < size; u++ {
+		output[u] = make([]float64, size)
+		for v := 0; v < size; v++ {
+			var sum float64
+			for x := 0; x < size; x++ {
+				for y := 0; y < size; y++ {
+					sum += input[y][x] * cos(u, x) * cos(v, y)
+				}
+			}
+			cu := 1.0
+			cv := 1.0
+			if u == 0 {
+				cu = 1.0 / math.Sqrt(2)
+			}
+			if v == 0 {
+				cv = 1.0 / math.Sqrt(2)
+			}
+			output[u][v] = sum * cu * cv * 2.0 / float64(size)
+		}
+	}
+	return output
+}
+
+func TestComputeDCTMatchesReference(t *testing.T) {
+	// Tolerance accounts for summation-order rounding: coefficients come from
+	// 1024-term sums with term magnitudes up to 255, so reordered float64
+	// accumulation can differ by ~1e-8; 1e-6 still catches real errors.
+	const epsilon = 1e-6
+
+	inputs := map[string]func(y, x int) float64{
+		"constant": func(y, x int) float64 { return 128 },
+		"gradient": func(y, x int) float64 { return float64(x * 255 / dctSize) },
+		"checkerboard": func(y, x int) float64 {
+			if (x+y)%2 == 0 {
+				return 255
+			}
+			return 0
+		},
+		"pseudorandom": func(y, x int) float64 {
+			return float64((x*31 + y*17 + x*y*13) % 256)
+		},
+	}
+
+	for name, gen := range inputs {
+		t.Run(name, func(t *testing.T) {
+			input := make([][]float64, dctSize)
+			for y := 0; y < dctSize; y++ {
+				input[y] = make([]float64, dctSize)
+				for x := 0; x < dctSize; x++ {
+					input[y][x] = gen(y, x)
+				}
+			}
+
+			got := computeDCT(input)
+			want := referenceDCT(input)
+
+			for u := 0; u < dctSize; u++ {
+				for v := 0; v < dctSize; v++ {
+					if diff := math.Abs(got[u][v] - want[u][v]); diff > epsilon {
+						t.Fatalf("DCT[%d][%d] = %v, reference = %v (diff %v > %v)", u, v, got[u][v], want[u][v], diff, epsilon)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestComputeDCTPanicsOnWrongSize(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("computeDCT did not panic on wrong input size")
+		}
+	}()
+	computeDCT(make([][]float64, 8))
 }
