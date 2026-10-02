@@ -1,11 +1,13 @@
 package cache
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -210,20 +212,9 @@ func (c *BoltCache) Close() error {
 // Scan walks a directory and caches hashes for all images.
 // The callback is called with progress updates.
 func (c *BoltCache) Scan(dir string, callback func(ScanProgress)) error {
-	// First, count total images
-	var paths []string
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // Skip inaccessible files
-		}
-		if !info.IsDir() && imgutil.IsImageFile(path) {
-			paths = append(paths, path)
-		}
-		return nil
-	})
+	paths, err := imgutil.FindImages(dir)
 	if err != nil {
-		progress := ScanProgress{Error: err.Error(), Done: true}
-		callback(progress)
+		callback(ScanProgress{Error: err.Error(), Done: true})
 		return err
 	}
 
@@ -232,33 +223,26 @@ func (c *BoltCache) Scan(dir string, callback func(ScanProgress)) error {
 	cached := 0
 
 	// Report initial progress
-	callback(ScanProgress{Scanned: 0, Total: total, Cached: 0, Done: false})
+	callback(ScanProgress{Total: total})
 
-	// Process each image
 	for _, path := range paths {
-		info, err := os.Stat(path)
-		if err != nil {
-			scanned++
-			continue
-		}
-
-		// Check if already cached with current mtime
-		if _, ok := c.Get(path, info.ModTime()); ok {
-			scanned++
-			cached++
-			callback(ScanProgress{Scanned: scanned, Total: total, Cached: cached, Done: false})
-			continue
-		}
-
-		// Compute hash and cache it
-		data := imgutil.LoadAndHash(path)
-		if data.Error == nil {
-			c.Put(path, info.ModTime(), &data)
-			cached++
-		}
 		scanned++
 
-		callback(ScanProgress{Scanned: scanned, Total: total, Cached: cached, Done: false})
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+
+		if _, ok := c.Get(path, info.ModTime()); ok {
+			// Already cached with current mtime
+			cached++
+		} else if data := imgutil.LoadAndHash(path); data.Error == nil {
+			if err := c.Put(path, info.ModTime(), &data); err == nil {
+				cached++
+			}
+		}
+
+		callback(ScanProgress{Scanned: scanned, Total: total, Cached: cached})
 	}
 
 	callback(ScanProgress{Scanned: scanned, Total: total, Cached: cached, Done: true})
@@ -285,37 +269,24 @@ const maxDirDepth = 4
 
 // truncateDirPath limits a directory path to maxDirDepth levels
 func truncateDirPath(dir string) string {
-	// Handle empty path
 	if dir == "" {
 		return dir
 	}
 
-	// Check if path is absolute
-	isAbsolute := dir[0] == '/'
-
-	// Split path into components
-	var parts []string
 	cleaned := filepath.Clean(dir)
-	for cleaned != "" && cleaned != "/" && cleaned != "." {
-		parts = append([]string{filepath.Base(cleaned)}, parts...)
-		parent := filepath.Dir(cleaned)
-		if parent == cleaned {
-			break
-		}
-		cleaned = parent
+	if cleaned == "." {
+		return ""
 	}
 
-	// Truncate to maxDirDepth levels
+	parts := strings.Split(strings.TrimPrefix(cleaned, "/"), "/")
 	if len(parts) > maxDirDepth {
 		parts = parts[:maxDirDepth]
 	}
 
-	// Reconstruct path
-	result := filepath.Join(parts...)
-	if isAbsolute {
+	result := strings.Join(parts, "/")
+	if filepath.IsAbs(dir) {
 		result = "/" + result
 	}
-
 	return result
 }
 
@@ -334,20 +305,12 @@ func (c *BoltCache) ListDirectories() []DirectoryInfo {
 		cursor := b.Cursor()
 		for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
 			// Key format: path\x00mtime_nanoseconds
-			// Extract the path by finding the null byte
-			keyStr := string(k)
-			nullIdx := -1
-			for i := 0; i < len(keyStr); i++ {
-				if keyStr[i] == 0 {
-					nullIdx = i
-					break
-				}
-			}
+			nullIdx := bytes.IndexByte(k, 0)
 			if nullIdx == -1 {
 				continue
 			}
 
-			path := keyStr[:nullIdx]
+			path := string(k[:nullIdx])
 			dir := filepath.Dir(path)
 			// Truncate to max depth
 			truncatedDir := truncateDirPath(dir)
