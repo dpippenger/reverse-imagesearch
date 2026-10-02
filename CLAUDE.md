@@ -37,10 +37,9 @@ make build
 **Image Processing** (`internal/imgutil`)
 - `imgutil.LoadAndHash()` - Load from file path and compute all hashes
 - `imgutil.LoadAndHashFromReader()` - Load from io.Reader (for uploads)
-- `imgutil.GenerateThumbnail()` - Create base64 JPEG thumbnails for web UI
+- `imgutil.GenerateThumbnail()` - Create JPEG thumbnail bytes for the web UI
 - `imgutil.IsImageFile()` - Check if a file is a supported image format
 - `imgutil.FindImages()` - Recursively find all image files in a directory
-- `imgutil.Grayscale()` - Convert image to grayscale
 
 **EXIF Extraction** (`internal/exif`)
 - `exif.Extract()` - Extract EXIF metadata from image files
@@ -77,10 +76,8 @@ BoltDB-based persistent cache for computed image hashes. Eliminates redundant O(
 ### Web Server (`internal/web`)
 
 **Constructors:**
-- `web.New(port)` - Create server bound to localhost
-- `web.NewWithOptions(port, bindAddr, basePath)` - Create with custom bind address and base path
-- `web.NewWithBasePath(port, basePath)` - Create with custom base path (localhost only)
-- `web.NewWithCache(port, bindAddr, basePath, cachePath)` - Create with cache support
+- `web.NewWithOptions(port, bindAddr, basePath)` - Create server; empty bindAddr defaults to localhost, empty basePath to the user's home
+- `(*Server).SetCache(c)` - Enable hash caching
 
 **Endpoints:**
 - `GET /` - Serves embedded HTML UI
@@ -114,7 +111,7 @@ BoltDB-based persistent cache for computed image hashes. Eliminates redundant O(
 
 - Streams results to stdout as found (unsorted)
 - Optional `-output` writes sorted results to file
-- `-top N` limits output count
+- `-top N` returns only the N most similar matches, emitted sorted after the scan completes
 
 ## Key Data Structures
 
@@ -147,12 +144,11 @@ type Config struct {
 
 // internal/search
 type Result struct {
-    Match     imgutil.Match
-    Thumbnail string
-    Total     int
-    Scanned   int
-    Done      bool
-    Error     string
+    Match   imgutil.Match
+    Total   int
+    Scanned int
+    Done    bool
+    Error   string
 }
 
 // internal/cache
@@ -299,7 +295,7 @@ Note: Individual package coverage is measured by running `go test -cover ./inter
 ### Implemented Security Features
 
 - **Localhost Binding by Default**: Server binds to `127.0.0.1` by default; use `-bind 0.0.0.0` to allow network access.
-- **Path Traversal Protection**: All file access endpoints validate paths are within allowed base directory (defaults to user's home directory). Use `web.NewWithBasePath()` to configure a custom base path.
+- **Path Traversal Protection**: All file access endpoints validate paths are within allowed base directory (defaults to user's home directory). Pass a `basePath` to `web.NewWithOptions()` to configure a custom base path.
 - **Header Injection Prevention**: Filenames in Content-Disposition headers are sanitized to prevent HTTP header injection attacks.
 - **Cryptographic Search IDs**: Search IDs use `crypto/rand` for unpredictable 128-bit identifiers.
 - **Same-Origin SSE**: Removed wildcard CORS header from SSE endpoint; only same-origin requests allowed.
