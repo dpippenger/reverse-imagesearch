@@ -2,10 +2,13 @@ package search
 
 import (
 	"context"
+	"fmt"
+	"image"
 	"image/color"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"sync"
 	"testing"
 
@@ -141,48 +144,6 @@ func TestRun(t *testing.T) {
 		// With 99% threshold, checkerboard should not match solid colors
 		// (though this depends on the hashing algorithm)
 		t.Logf("Match count at 99%% threshold: %d", matchCount)
-	})
-
-	t.Run("TopN limiting", func(t *testing.T) {
-		// Create directory with multiple similar images
-		tmpDir, err := os.MkdirTemp("", "topn-*")
-		if err != nil {
-			t.Fatalf("Failed to create temp dir: %v", err)
-		}
-		defer os.RemoveAll(tmpDir)
-
-		// Create 5 nearly identical images
-		for i := 0; i < 5; i++ {
-			img := testutil.SolidColorImage(32, 32, color.RGBA{255, uint8(i), 0, 255})
-			path, _ := testutil.CreateTempJPEG(img)
-			os.Rename(path, tmpDir+"/image"+string(rune('0'+i))+".jpg")
-		}
-
-		sourceImg := testutil.SolidColorImage(32, 32, color.RGBA{255, 0, 0, 255})
-		sourcePath, _ := testutil.CreateTempJPEG(sourceImg)
-		defer os.Remove(sourcePath)
-
-		sourceData := imgutil.LoadAndHash(sourcePath)
-
-		config := Config{
-			SearchDir: tmpDir,
-			Threshold: 0.0, // Accept all
-			TopN:      2,   // Only top 2
-			Workers:   1,
-		}
-
-		var matchCount int
-
-		Run(context.Background(), sourceData, config, func(r Result) {
-			if r.Match.Path != "" {
-				matchCount++
-			}
-		})
-
-		// Should only get TopN matches
-		if matchCount > 2 {
-			t.Errorf("Expected at most 2 matches, got %d", matchCount)
-		}
 	})
 
 	t.Run("default workers equals NumCPU", func(t *testing.T) {
@@ -460,4 +421,188 @@ func BenchmarkRun(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		Run(context.Background(), sourceData, config, func(r Result) {})
 	}
+}
+
+// gradedSearchDir creates a directory of solid-color images with graded
+// similarity to a solid red source. It returns the directory, the source
+// hash data, and the expected matches sorted by similarity descending.
+func gradedSearchDir(t *testing.T) (string, hash.Data, []imgutil.Match) {
+	t.Helper()
+
+	colors := []color.RGBA{
+		{255, 0, 0, 255},
+		{225, 30, 0, 255},
+		{195, 60, 0, 255},
+		{165, 90, 0, 255},
+		{135, 120, 0, 255},
+		{105, 150, 0, 255},
+		{75, 180, 0, 255},
+		{45, 210, 0, 255},
+	}
+	images := make(map[string]image.Image, len(colors))
+	for i, c := range colors {
+		images[fmt.Sprintf("img%d.jpg", i)] = testutil.SolidColorImage(32, 32, c)
+	}
+
+	dir, cleanup, err := testutil.CreateTempDir(images)
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	t.Cleanup(cleanup)
+
+	sourcePath, err := testutil.CreateTempJPEG(testutil.SolidColorImage(32, 32, color.RGBA{255, 0, 0, 255}))
+	if err != nil {
+		t.Fatalf("Failed to create source JPEG: %v", err)
+	}
+	t.Cleanup(func() { os.Remove(sourcePath) })
+	sourceData := imgutil.LoadAndHash(sourcePath)
+
+	files, err := imgutil.FindImages(dir)
+	if err != nil {
+		t.Fatalf("Failed to list images: %v", err)
+	}
+	expected := make([]imgutil.Match, 0, len(files))
+	for _, f := range files {
+		d := imgutil.LoadAndHash(f)
+		if d.Error != nil {
+			t.Fatalf("Failed to hash %s: %v", f, d.Error)
+		}
+		expected = append(expected, imgutil.Match{
+			Path:       f,
+			Similarity: imgutil.ComputeSimilarity(sourceData, d),
+			Hash:       d.PHash,
+		})
+	}
+	sort.Slice(expected, func(i, j int) bool {
+		return expected[i].Similarity > expected[j].Similarity
+	})
+	return dir, sourceData, expected
+}
+
+// collectResults runs a search and partitions callback results.
+func collectResults(sourceData hash.Data, config Config) (matches []Result, progress []Result, done []Result) {
+	var mu sync.Mutex
+	Run(context.Background(), sourceData, config, func(r Result) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.Done:
+			done = append(done, r)
+		case r.Match.Path == "":
+			progress = append(progress, r)
+		default:
+			matches = append(matches, r)
+		}
+	})
+	return matches, progress, done
+}
+
+func TestRunTopN(t *testing.T) {
+	dir, sourceData, expected := gradedSearchDir(t)
+
+	tests := []struct {
+		name      string
+		topN      int
+		wantCount int
+	}{
+		{"top 1", 1, 1},
+		{"top 3", 3, 3},
+		{"topN exceeding match count returns all", 20, len(expected)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := Config{
+				SearchDir: dir,
+				Threshold: 0.0,
+				Workers:   8, // enough workers that arrival order varies
+				TopN:      tt.topN,
+			}
+
+			matches, progress, _ := collectResults(sourceData, config)
+
+			if len(matches) != tt.wantCount {
+				t.Fatalf("Expected %d matches, got %d", tt.wantCount, len(matches))
+			}
+			for i, m := range matches {
+				if i > 0 && m.Match.Similarity > matches[i-1].Match.Similarity {
+					t.Errorf("Matches not in descending order at index %d: %.2f > %.2f",
+						i, m.Match.Similarity, matches[i-1].Match.Similarity)
+				}
+				// The i-th emitted match must have the i-th best similarity.
+				if m.Match.Similarity != expected[i].Similarity {
+					t.Errorf("Match %d similarity = %.4f, want %.4f (path %s)",
+						i, m.Match.Similarity, expected[i].Similarity, m.Match.Path)
+				}
+				if m.Thumbnail == "" {
+					t.Errorf("Match %d (%s) missing thumbnail", i, m.Match.Path)
+				}
+			}
+
+			if len(progress) == 0 {
+				t.Error("Expected progress-only results while buffering")
+			}
+			for _, p := range progress {
+				if p.Total != len(expected) || p.Scanned < 1 {
+					t.Errorf("Progress result has Total=%d Scanned=%d", p.Total, p.Scanned)
+				}
+			}
+		})
+	}
+
+	t.Run("TopN=0 streams all matches", func(t *testing.T) {
+		config := Config{
+			SearchDir: dir,
+			Threshold: 0.0,
+			Workers:   8,
+			TopN:      0,
+		}
+
+		matches, _, done := collectResults(sourceData, config)
+
+		if len(matches) != len(expected) {
+			t.Errorf("Expected %d streamed matches, got %d", len(expected), len(matches))
+		}
+		for _, m := range matches {
+			if m.Thumbnail == "" {
+				t.Errorf("Streamed match %s missing thumbnail", m.Match.Path)
+			}
+		}
+		if len(done) != 1 || done[0].Scanned != len(expected) {
+			t.Errorf("Expected one Done result with Scanned=%d, got %+v", len(expected), done)
+		}
+	})
+
+	t.Run("TopN with cache hits", func(t *testing.T) {
+		c, err := cache.New(filepath.Join(t.TempDir(), "cache.db"))
+		if err != nil {
+			t.Fatalf("Failed to create cache: %v", err)
+		}
+		defer c.Close()
+
+		config := Config{
+			SearchDir: dir,
+			Threshold: 0.0,
+			Workers:   8,
+			TopN:      3,
+			Cache:     c,
+		}
+
+		// First run populates the cache; second run should hit it.
+		collectResults(sourceData, config)
+		matches, _, _ := collectResults(sourceData, config)
+
+		if c.Stats().Hits == 0 {
+			t.Error("Expected cache hits on second run")
+		}
+		if len(matches) != 3 {
+			t.Fatalf("Expected 3 matches from cached run, got %d", len(matches))
+		}
+		for i, m := range matches {
+			if m.Match.Similarity != expected[i].Similarity {
+				t.Errorf("Cached match %d similarity = %.4f, want %.4f",
+					i, m.Match.Similarity, expected[i].Similarity)
+			}
+		}
+	})
 }

@@ -5,12 +5,17 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
 	"sync"
 
 	"imgsearch/internal/cache"
 	"imgsearch/internal/hash"
 	"imgsearch/internal/imgutil"
 )
+
+// maxProgressUpdates bounds the number of progress-only results emitted
+// while matches are buffered in TopN mode.
+const maxProgressUpdates = 100
 
 // Config holds search parameters
 type Config struct {
@@ -32,6 +37,14 @@ type Result struct {
 }
 
 // Run performs the image search and calls the callback for each result.
+// The callback may be called concurrently from worker goroutines and must
+// be safe for concurrent use.
+//
+// When config.TopN == 0, every match at or above the threshold is streamed
+// as it is found. When config.TopN > 0, matches are buffered and the N most
+// similar (sorted by similarity, descending) are emitted after all workers
+// finish; while buffering, throttled progress-only results (empty Match,
+// Total and Scanned set) are emitted so callers can track progress.
 // The context can be used to cancel the search early (e.g., when a client disconnects).
 func Run(ctx context.Context, sourceData hash.Data, config Config, callback func(Result)) {
 	// Find all images in directory
@@ -52,11 +65,62 @@ func Run(ctx context.Context, sourceData hash.Data, config Config, callback func
 		numWorkers = runtime.NumCPU()
 	}
 
+	// Emit a progress-only result roughly every progressEvery scans in
+	// TopN mode, capping updates at maxProgressUpdates per search.
+	progressEvery := totalImages / maxProgressUpdates
+	if progressEvery < 1 {
+		progressEvery = 1
+	}
+
 	var wg sync.WaitGroup
 	imageChan := make(chan string, numWorkers*2)
-	var resultMutex sync.Mutex
+	var mu sync.Mutex
 	scanned := 0
-	resultCount := 0
+	var buffered []imgutil.Match
+
+	processImage := func(path string) {
+		data := hashImage(path, config.Cache)
+
+		mu.Lock()
+		scanned++
+		currentScanned := scanned
+		mu.Unlock()
+
+		if data.Error != nil {
+			return
+		}
+
+		similarity := imgutil.ComputeSimilarity(sourceData, data)
+		isMatch := similarity >= config.Threshold
+
+		if config.TopN > 0 {
+			// Buffer matches; emit throttled progress-only results so
+			// callers can track progress while results are withheld.
+			if isMatch {
+				mu.Lock()
+				buffered = append(buffered, imgutil.Match{Path: path, Similarity: similarity, Hash: data.PHash})
+				mu.Unlock()
+			}
+			if currentScanned%progressEvery == 0 {
+				callback(Result{Total: totalImages, Scanned: currentScanned})
+			}
+			return
+		}
+
+		if !isMatch {
+			return
+		}
+
+		// Generate thumbnail
+		thumb, _ := imgutil.GenerateThumbnail(path, 200)
+
+		callback(Result{
+			Match:     imgutil.Match{Path: path, Similarity: similarity, Hash: data.PHash},
+			Thumbnail: thumb,
+			Total:     totalImages,
+			Scanned:   currentScanned,
+		})
+	}
 
 	// Start workers
 	for i := 0; i < numWorkers; i++ {
@@ -70,68 +134,7 @@ func Run(ctx context.Context, sourceData hash.Data, config Config, callback func
 					return
 				default:
 				}
-
-				var data hash.Data
-
-				// Try cache first
-				if config.Cache != nil {
-					if info, err := os.Stat(path); err == nil {
-						if cached, ok := config.Cache.Get(path, info.ModTime()); ok {
-							data = *cached
-						}
-					}
-				}
-
-				// Compute if not cached
-				if data.Path == "" {
-					data = imgutil.LoadAndHash(path)
-					// Cache the result if we have a cache and no error
-					if config.Cache != nil && data.Error == nil {
-						if info, err := os.Stat(path); err == nil {
-							if putErr := config.Cache.Put(path, info.ModTime(), &data); putErr != nil {
-								fmt.Fprintf(os.Stderr, "Warning: cache write failed for %s: %v\n", path, putErr)
-							}
-						}
-					}
-				}
-
-				resultMutex.Lock()
-				scanned++
-				currentScanned := scanned
-				resultMutex.Unlock()
-
-				if data.Error != nil {
-					continue
-				}
-
-				similarity := imgutil.ComputeSimilarity(sourceData, data)
-				if similarity >= config.Threshold {
-					resultMutex.Lock()
-					resultCount++
-					currentCount := resultCount
-					resultMutex.Unlock()
-
-					// Check if we should limit results
-					if config.TopN > 0 && currentCount > config.TopN {
-						continue
-					}
-
-					match := imgutil.Match{
-						Path:       path,
-						Similarity: similarity,
-						Hash:       data.PHash,
-					}
-
-					// Generate thumbnail
-					thumb, _ := imgutil.GenerateThumbnail(path, 200)
-
-					callback(Result{
-						Match:     match,
-						Thumbnail: thumb,
-						Total:     totalImages,
-						Scanned:   currentScanned,
-					})
-				}
+				processImage(path)
 			}
 		}()
 	}
@@ -150,8 +153,61 @@ sendLoop:
 	// Wait for completion
 	wg.Wait()
 
-	resultMutex.Lock()
+	mu.Lock()
 	finalScanned := scanned
-	resultMutex.Unlock()
+	mu.Unlock()
+
+	if config.TopN > 0 {
+		emitTopN(buffered, config.TopN, totalImages, finalScanned, callback)
+	}
+
 	callback(Result{Done: true, Total: totalImages, Scanned: finalScanned})
+}
+
+// emitTopN sorts buffered matches by similarity (descending) and emits the
+// best n, generating thumbnails only for those emitted.
+func emitTopN(matches []imgutil.Match, n, total, scanned int, callback func(Result)) {
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].Similarity > matches[j].Similarity
+	})
+	if len(matches) > n {
+		matches = matches[:n]
+	}
+	for _, m := range matches {
+		// Generate thumbnail
+		thumb, _ := imgutil.GenerateThumbnail(m.Path, 200)
+		callback(Result{
+			Match:     m,
+			Thumbnail: thumb,
+			Total:     total,
+			Scanned:   scanned,
+		})
+	}
+}
+
+// hashImage loads and hashes the image at path, consulting the cache when
+// one is provided. The file is stat'ed once and its mtime reused for both
+// the cache lookup and the cache write.
+func hashImage(path string, c cache.Cache) hash.Data {
+	if c == nil {
+		return imgutil.LoadAndHash(path)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return imgutil.LoadAndHash(path)
+	}
+	mtime := info.ModTime()
+
+	if cached, hit := c.Get(path, mtime); hit {
+		return *cached
+	}
+
+	data := imgutil.LoadAndHash(path)
+	if data.Error == nil {
+		if putErr := c.Put(path, mtime, &data); putErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: cache write failed for %s: %v\n", path, putErr)
+		}
+	}
+	return data
 }
