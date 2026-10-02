@@ -246,6 +246,33 @@ func TestOrientationMapping(t *testing.T) {
 	}
 }
 
+// TestFormatExposure covers exposure-time formatting, including the
+// num == 0 case that previously caused an integer divide-by-zero panic.
+func TestFormatExposure(t *testing.T) {
+	tests := []struct {
+		name       string
+		num, denom int64
+		want       string
+	}{
+		{"zero numerator", 0, 125, ""},
+		{"zero denominator", 1, 0, ""},
+		{"negative numerator", -1, 125, ""},
+		{"fast exposure", 1, 125, "1/125 s"},
+		{"half second", 1, 2, "1/2 s"},
+		{"non-unit fraction", 2, 125, "1/62 s"},
+		{"exactly one second", 1, 1, "1.0 s"},
+		{"slow exposure", 5, 2, "2.5 s"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatExposure(tt.num, tt.denom); got != tt.want {
+				t.Errorf("formatExposure(%d, %d) = %q, want %q", tt.num, tt.denom, got, tt.want)
+			}
+		})
+	}
+}
+
 // Benchmark tests
 func BenchmarkExtract(b *testing.B) {
 	img := testutil.GradientImage(256, 256)

@@ -612,6 +612,11 @@ func TestTruncateDirPath(t *testing.T) {
 		{"/a/b/c/d/e/f/g", "/a/b/c/d"},                                // 7 levels, truncated
 		{"/home/user/photos/2024/vacation", "/home/user/photos/2024"}, // 5 levels
 		{"a/b/c/d/e", "a/b/c/d"},                                      // relative path, 5 levels
+		{"a/b/c", "a/b/c"},                                            // relative path, unchanged
+		{"/a/b/c/d/e/", "/a/b/c/d"},                                   // trailing slash
+		{"/", "/"},                                                    // root
+		{".", ""},                                                     // current dir
+		{"", ""},                                                      // empty
 	}
 
 	for _, tt := range tests {

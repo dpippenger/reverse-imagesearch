@@ -3,6 +3,7 @@ package exif
 import (
 	"fmt"
 	"image"
+	"io"
 	"os"
 	"strings"
 
@@ -29,6 +30,32 @@ type Data struct {
 	Error        string `json:"error,omitempty"`
 }
 
+// orientationNames maps EXIF orientation values to human-readable names
+var orientationNames = map[int]string{
+	1: "Normal",
+	2: "Flipped horizontal",
+	3: "Rotated 180°",
+	4: "Flipped vertical",
+	5: "Rotated 90° CCW, flipped",
+	6: "Rotated 90° CW",
+	7: "Rotated 90° CW, flipped",
+	8: "Rotated 90° CCW",
+}
+
+// formatExposure renders an EXIF exposure-time rational as a human-readable
+// string. Fast exposures (num < denom) are shown as a fraction ("1/125 s"),
+// slow ones as seconds ("2.5 s"). Returns "" for non-positive numerators or
+// denominators, which cannot represent a valid exposure time.
+func formatExposure(num, denom int64) string {
+	if num <= 0 || denom <= 0 {
+		return ""
+	}
+	if num < denom {
+		return fmt.Sprintf("1/%d s", denom/num)
+	}
+	return fmt.Sprintf("%.1f s", float64(num)/float64(denom))
+}
+
 // Extract reads EXIF metadata from an image file
 func Extract(path string) Data {
 	data := Data{}
@@ -53,7 +80,10 @@ func Extract(path string) Data {
 	}
 
 	// Reset file position for EXIF reading
-	file.Seek(0, 0)
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		data.Error = fmt.Sprintf("seeking %q: %v", path, err)
+		return data
+	}
 
 	x, err := exif.Decode(file)
 	if err != nil {
@@ -77,6 +107,7 @@ func Extract(path string) Data {
 	data.Make = getString(exif.Make)
 	data.Model = getString(exif.Model)
 	data.Software = getString(exif.Software)
+	data.LensModel = getString(exif.LensModel)
 
 	// DateTime
 	if dt, err := x.DateTime(); err == nil {
@@ -86,17 +117,7 @@ func Extract(path string) Data {
 	// Orientation
 	if orient, err := x.Get(exif.Orientation); err == nil {
 		if v, err := orient.Int(0); err == nil {
-			orientations := map[int]string{
-				1: "Normal",
-				2: "Flipped horizontal",
-				3: "Rotated 180°",
-				4: "Flipped vertical",
-				5: "Rotated 90° CCW, flipped",
-				6: "Rotated 90° CW",
-				7: "Rotated 90° CW, flipped",
-				8: "Rotated 90° CCW",
-			}
-			if name, ok := orientations[v]; ok {
+			if name, ok := orientationNames[v]; ok {
 				data.Orientation = name
 			}
 		}
@@ -111,12 +132,8 @@ func Extract(path string) Data {
 
 	// Exposure time
 	if et, err := x.Get(exif.ExposureTime); err == nil {
-		if num, denom, err := et.Rat2(0); err == nil && denom != 0 {
-			if num < denom {
-				data.ExposureTime = fmt.Sprintf("1/%d s", denom/num)
-			} else {
-				data.ExposureTime = fmt.Sprintf("%.1f s", float64(num)/float64(denom))
-			}
+		if num, denom, err := et.Rat2(0); err == nil {
+			data.ExposureTime = formatExposure(num, denom)
 		}
 	}
 
@@ -131,13 +148,6 @@ func Extract(path string) Data {
 	if fl, err := x.Get(exif.FocalLength); err == nil {
 		if num, denom, err := fl.Rat2(0); err == nil && denom != 0 {
 			data.FocalLength = fmt.Sprintf("%.0f mm", float64(num)/float64(denom))
-		}
-	}
-
-	// Lens model
-	if lens, err := x.Get(exif.LensModel); err == nil {
-		if s, err := lens.StringVal(); err == nil {
-			data.LensModel = strings.TrimSpace(s)
 		}
 	}
 

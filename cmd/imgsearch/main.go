@@ -75,7 +75,7 @@ func run() error {
 	fmt.Printf("Loading source image: %s\n", *sourceFile)
 	sourceData := imgutil.LoadAndHash(*sourceFile)
 	if sourceData.Error != nil {
-		return fmt.Errorf("loading source image: %v", sourceData.Error)
+		return fmt.Errorf("loading source image: %w", sourceData.Error)
 	}
 
 	if *verbose {
@@ -92,10 +92,11 @@ func run() error {
 	}
 
 	config := search.Config{
-		SearchDir: *searchDir,
-		Threshold: *threshold,
-		Workers:   *workers,
-		TopN:      *topN,
+		SearchDir:   *searchDir,
+		Threshold:   *threshold,
+		Workers:     *workers,
+		TopN:        *topN,
+		ExcludePath: absSource,
 	}
 	if hashCache != nil {
 		config.Cache = hashCache
@@ -119,11 +120,6 @@ func run() error {
 			return
 		}
 
-		// Exclude the source image from results
-		if absMatch, err := filepath.Abs(r.Match.Path); err == nil && absMatch == absSource {
-			return
-		}
-
 		resultMutex.Lock()
 		resultCount++
 		allMatches = append(allMatches, r.Match)
@@ -144,7 +140,7 @@ func run() error {
 	if *outputFile != "" {
 		outFile, err := os.Create(*outputFile)
 		if err != nil {
-			return fmt.Errorf("creating output file: %v", err)
+			return fmt.Errorf("creating output file: %w", err)
 		}
 		defer outFile.Close()
 

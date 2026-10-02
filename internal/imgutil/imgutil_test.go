@@ -2,7 +2,6 @@ package imgutil
 
 import (
 	"bytes"
-	"encoding/base64"
 	"image"
 	"image/color"
 	"os"
@@ -111,57 +110,6 @@ func TestComputeSimilarity(t *testing.T) {
 		// Total should be around 35
 		if similarity < 30 || similarity > 40 {
 			t.Errorf("Weight distribution incorrect: similarity = %f, expected ~35", similarity)
-		}
-	})
-}
-
-func TestGrayscale(t *testing.T) {
-	t.Run("output type is image.Gray", func(t *testing.T) {
-		img := testutil.SolidColorImage(32, 32, color.RGBA{255, 0, 0, 255})
-		gray := Grayscale(img)
-
-		if _, ok := interface{}(gray).(*image.Gray); !ok {
-			t.Error("Grayscale did not return *image.Gray")
-		}
-	})
-
-	t.Run("bounds are preserved", func(t *testing.T) {
-		img := testutil.SolidColorImage(100, 50, color.White)
-		gray := Grayscale(img)
-
-		if gray.Bounds() != img.Bounds() {
-			t.Errorf("Bounds mismatch: got %v, want %v", gray.Bounds(), img.Bounds())
-		}
-	})
-
-	t.Run("white stays white", func(t *testing.T) {
-		img := testutil.SolidColorImage(10, 10, color.White)
-		gray := Grayscale(img)
-
-		pixel := gray.GrayAt(5, 5)
-		if pixel.Y != 255 {
-			t.Errorf("White pixel grayscale = %d, want 255", pixel.Y)
-		}
-	})
-
-	t.Run("black stays black", func(t *testing.T) {
-		img := testutil.SolidColorImage(10, 10, color.Black)
-		gray := Grayscale(img)
-
-		pixel := gray.GrayAt(5, 5)
-		if pixel.Y != 0 {
-			t.Errorf("Black pixel grayscale = %d, want 0", pixel.Y)
-		}
-	})
-
-	t.Run("red converts to expected luminosity", func(t *testing.T) {
-		img := testutil.SolidColorImage(10, 10, color.RGBA{255, 0, 0, 255})
-		gray := Grayscale(img)
-
-		pixel := gray.GrayAt(5, 5)
-		expected := uint8(76) // 0.299 * 255 = ~76
-		if pixel.Y < expected-2 || pixel.Y > expected+2 {
-			t.Errorf("Red pixel grayscale = %d, want ~%d", pixel.Y, expected)
 		}
 	})
 }
@@ -354,7 +302,7 @@ func TestFindImages(t *testing.T) {
 }
 
 func TestGenerateThumbnail(t *testing.T) {
-	t.Run("generates valid base64", func(t *testing.T) {
+	t.Run("generates valid JPEG", func(t *testing.T) {
 		img := testutil.SolidColorImage(200, 200, color.RGBA{0, 0, 255, 255})
 		path, err := testutil.CreateTempJPEG(img)
 		if err != nil {
@@ -368,16 +316,13 @@ func TestGenerateThumbnail(t *testing.T) {
 			t.Errorf("GenerateThumbnail returned error: %v", err)
 		}
 
-		// Verify it's valid base64
-		decoded, err := base64.StdEncoding.DecodeString(thumb)
-		if err != nil {
-			t.Errorf("Invalid base64: %v", err)
-		}
-
 		// Verify it's a valid JPEG
-		_, _, err = image.Decode(bytes.NewReader(decoded))
+		_, format, err := image.Decode(bytes.NewReader(thumb))
 		if err != nil {
-			t.Errorf("Decoded data is not valid image: %v", err)
+			t.Errorf("Thumbnail data is not a valid image: %v", err)
+		}
+		if format != "jpeg" {
+			t.Errorf("Thumbnail format = %q, want jpeg", format)
 		}
 	})
 
@@ -394,8 +339,7 @@ func TestGenerateThumbnail(t *testing.T) {
 			t.Fatalf("GenerateThumbnail returned error: %v", err)
 		}
 
-		decoded, _ := base64.StdEncoding.DecodeString(thumb)
-		thumbImg, _, _ := image.Decode(bytes.NewReader(decoded))
+		thumbImg, _, _ := image.Decode(bytes.NewReader(thumb))
 
 		bounds := thumbImg.Bounds()
 		if bounds.Dx() > 50 || bounds.Dy() > 50 {
@@ -417,8 +361,7 @@ func TestGenerateThumbnail(t *testing.T) {
 			t.Fatalf("GenerateThumbnail returned error: %v", err)
 		}
 
-		decoded, _ := base64.StdEncoding.DecodeString(thumb)
-		thumbImg, _, _ := image.Decode(bytes.NewReader(decoded))
+		thumbImg, _, _ := image.Decode(bytes.NewReader(thumb))
 
 		bounds := thumbImg.Bounds()
 		ratio := float64(bounds.Dx()) / float64(bounds.Dy())

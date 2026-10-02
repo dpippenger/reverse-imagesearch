@@ -69,7 +69,8 @@ Security is enforced through localhost-only binding by default, path traversal p
 
 1. WHEN workers is set to 0, THE search.Run function SHALL default the worker count to `runtime.NumCPU()`.
 2. THE search.Run function SHALL distribute image paths to workers via a buffered channel and process them concurrently.
-3. WHEN a worker finds an image with similarity >= threshold, THE System SHALL invoke the callback with a Result containing the match, a 200px thumbnail, total image count, and current scanned count.
+3. WHEN a worker finds an image with similarity >= threshold, THE System SHALL invoke the callback with a Result containing the match, total image count, and current scanned count.
+6. WHEN TopN > 0, THE System SHALL buffer matches, emit throttled progress-only Results while scanning, and after the scan emit only the TopN most similar matches sorted by similarity descending.
 4. WHEN all images have been processed, THE System SHALL invoke the callback with a Result where Done is true and Scanned equals Total.
 5. WHEN the search directory contains no images, THE System SHALL invoke the callback with Done=true, Total=0, Scanned=0 immediately.
 
@@ -146,7 +147,7 @@ Security is enforced through localhost-only binding by default, path traversal p
 
 1. THE imgutil.LoadAndHash function SHALL open a file by path, decode it (supporting JPEG, PNG, and GIF via registered decoders), compute all four hashes, and return them in a hash.Data struct.
 2. THE imgutil.LoadAndHashFromReader function SHALL decode an image from an io.Reader and compute all four hashes, returning hash.Data and any error.
-3. THE imgutil.GenerateThumbnail function SHALL resize the image to fit within the specified max dimension (maintaining aspect ratio) and return a base64-encoded JPEG at quality 80.
+3. THE imgutil.GenerateThumbnail function SHALL resize the image to fit within the specified max dimension (maintaining aspect ratio) and return the raw JPEG bytes at quality 80. The web server base64-encodes thumbnails for matches into the SSE result payload.
 4. THE `POST /api/search` endpoint SHALL accept uploads up to 32MB.
 
 ### Requirement 10: EXIF Metadata Extraction
