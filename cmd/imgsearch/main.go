@@ -75,7 +75,7 @@ func run() error {
 	fmt.Printf("Loading source image: %s\n", *sourceFile)
 	sourceData := imgutil.LoadAndHash(*sourceFile)
 	if sourceData.Error != nil {
-		return fmt.Errorf("loading source image: %v", sourceData.Error)
+		return fmt.Errorf("loading source image: %w", sourceData.Error)
 	}
 
 	if *verbose {
@@ -144,7 +144,7 @@ func run() error {
 	if *outputFile != "" {
 		outFile, err := os.Create(*outputFile)
 		if err != nil {
-			return fmt.Errorf("creating output file: %v", err)
+			return fmt.Errorf("creating output file: %w", err)
 		}
 		defer outFile.Close()
 
