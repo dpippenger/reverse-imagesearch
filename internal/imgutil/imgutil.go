@@ -5,10 +5,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
-	"image/color"
 	_ "image/gif"
 	"image/jpeg"
-	_ "image/jpeg"
 	_ "image/png"
 	"io"
 	"os"
@@ -29,25 +27,17 @@ type Match struct {
 
 // LoadAndHash loads an image and computes all hashes
 func LoadAndHash(path string) hash.Data {
-	data := hash.Data{Path: path}
-
 	file, err := os.Open(path)
 	if err != nil {
-		data.Error = fmt.Errorf("opening image %q: %w", path, err)
-		return data
+		return hash.Data{Path: path, Error: fmt.Errorf("opening image %q: %w", path, err)}
 	}
 	defer file.Close()
 
-	img, _, err := image.Decode(file)
+	data, err := LoadAndHashFromReader(file)
+	data.Path = path
 	if err != nil {
 		data.Error = fmt.Errorf("decoding image %q: %w", path, err)
-		return data
 	}
-
-	data.PHash = hash.Perceptual(img)
-	data.AHash = hash.Average(img)
-	data.DHash = hash.Difference(img)
-	data.Histogram = hash.ComputeColorHistogram(img)
 
 	return data
 }
@@ -108,22 +98,6 @@ func FindImages(root string) ([]string, error) {
 	})
 
 	return images, err
-}
-
-// Grayscale converts an image to grayscale (for display purposes)
-func Grayscale(img image.Image) *image.Gray {
-	bounds := img.Bounds()
-	gray := image.NewGray(bounds)
-
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			r, g, b, _ := img.At(x, y).RGBA()
-			lum := uint8(0.299*float64(r>>8) + 0.587*float64(g>>8) + 0.114*float64(b>>8) + 0.5)
-			gray.SetGray(x, y, color.Gray{Y: lum})
-		}
-	}
-
-	return gray
 }
 
 // GenerateThumbnail creates a base64 encoded JPEG thumbnail
