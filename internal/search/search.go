@@ -28,12 +28,11 @@ type Config struct {
 
 // Result is sent for each match found
 type Result struct {
-	Match     imgutil.Match `json:"match"`
-	Thumbnail string        `json:"thumbnail,omitempty"`
-	Total     int           `json:"total"`
-	Scanned   int           `json:"scanned"`
-	Done      bool          `json:"done"`
-	Error     string        `json:"error,omitempty"`
+	Match   imgutil.Match `json:"match"`
+	Total   int           `json:"total"`
+	Scanned int           `json:"scanned"`
+	Done    bool          `json:"done"`
+	Error   string        `json:"error,omitempty"`
 }
 
 // Run performs the image search and calls the callback for each result.
@@ -111,14 +110,10 @@ func Run(ctx context.Context, sourceData hash.Data, config Config, callback func
 			return
 		}
 
-		// Generate thumbnail
-		thumb, _ := imgutil.GenerateThumbnail(path, 200)
-
 		callback(Result{
-			Match:     imgutil.Match{Path: path, Similarity: similarity, Hash: data.PHash},
-			Thumbnail: thumb,
-			Total:     totalImages,
-			Scanned:   currentScanned,
+			Match:   imgutil.Match{Path: path, Similarity: similarity, Hash: data.PHash},
+			Total:   totalImages,
+			Scanned: currentScanned,
 		})
 	}
 
@@ -165,7 +160,7 @@ sendLoop:
 }
 
 // emitTopN sorts buffered matches by similarity (descending) and emits the
-// best n, generating thumbnails only for those emitted.
+// best n.
 func emitTopN(matches []imgutil.Match, n, total, scanned int, callback func(Result)) {
 	sort.Slice(matches, func(i, j int) bool {
 		return matches[i].Similarity > matches[j].Similarity
@@ -174,13 +169,10 @@ func emitTopN(matches []imgutil.Match, n, total, scanned int, callback func(Resu
 		matches = matches[:n]
 	}
 	for _, m := range matches {
-		// Generate thumbnail
-		thumb, _ := imgutil.GenerateThumbnail(m.Path, 200)
 		callback(Result{
-			Match:     m,
-			Thumbnail: thumb,
-			Total:     total,
-			Scanned:   scanned,
+			Match:   m,
+			Total:   total,
+			Scanned: scanned,
 		})
 	}
 }

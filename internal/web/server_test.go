@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"image"
 	"image/color"
@@ -606,6 +607,80 @@ func TestHandleSearch(t *testing.T) {
 			t.Error("Expected error for path outside allowed directory")
 		}
 	})
+
+	t.Run("results stream includes thumbnail for matches", func(t *testing.T) {
+		img := testutil.SolidColorImage(64, 64, color.RGBA{255, 0, 0, 255})
+		jpegBytes := testutil.EncodeJPEG(img)
+
+		tmpDir, err := os.MkdirTemp("", "search-thumb-*")
+		if err != nil {
+			t.Fatalf("Failed to create temp dir: %v", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		// An identical image in the search dir guarantees a match.
+		if err := os.WriteFile(filepath.Join(tmpDir, "match.jpg"), jpegBytes, 0o644); err != nil {
+			t.Fatalf("Failed to write match image: %v", err)
+		}
+
+		var buf bytes.Buffer
+		writer := multipart.NewWriter(&buf)
+		part, _ := writer.CreateFormFile("image", "test.jpg")
+		part.Write(jpegBytes)
+		writer.WriteField("dir", tmpDir)
+		writer.WriteField("threshold", "50")
+		writer.Close()
+
+		req := httptest.NewRequest("POST", "/api/search", &buf)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		w := httptest.NewRecorder()
+		server.handleSearch(w, req)
+
+		var searchResp map[string]string
+		json.NewDecoder(w.Result().Body).Decode(&searchResp)
+		searchID := searchResp["searchId"]
+		if searchID == "" {
+			t.Fatalf("Expected searchId, got %v", searchResp)
+		}
+
+		resultsReq := httptest.NewRequest("GET", "/api/results/"+searchID, nil)
+		resultsW := httptest.NewRecorder()
+		server.handleResults(resultsW, resultsReq)
+
+		var foundThumbnail bool
+		for _, line := range strings.Split(resultsW.Body.String(), "\n") {
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			var payload struct {
+				Match struct {
+					Path string `json:"path"`
+				} `json:"match"`
+				Thumbnail string `json:"thumbnail"`
+			}
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &payload); err != nil {
+				t.Fatalf("Invalid SSE JSON %q: %v", line, err)
+			}
+			if payload.Match.Path == "" {
+				continue
+			}
+			if payload.Thumbnail == "" {
+				t.Errorf("Match %s missing thumbnail", payload.Match.Path)
+				continue
+			}
+			decoded, err := base64.StdEncoding.DecodeString(payload.Thumbnail)
+			if err != nil {
+				t.Fatalf("Thumbnail is not valid base64: %v", err)
+			}
+			if len(decoded) < 2 || decoded[0] != 0xFF || decoded[1] != 0xD8 {
+				t.Error("Thumbnail should decode to a JPEG")
+			}
+			foundThumbnail = true
+		}
+		if !foundThumbnail {
+			t.Error("Expected at least one match with a thumbnail in SSE stream")
+		}
+	})
 }
 
 func TestHandleResults(t *testing.T) {
@@ -628,7 +703,7 @@ func TestHandleResults(t *testing.T) {
 
 		// Create a search result channel and register it
 		searchID := "test-search-123"
-		resultChan := make(chan search.Result, 10)
+		resultChan := make(chan sseResult, 10)
 		_, cancel := context.WithCancel(context.Background())
 		server.searchesMu.Lock()
 		now := time.Now()
@@ -641,12 +716,12 @@ func TestHandleResults(t *testing.T) {
 
 		// Send results in a goroutine
 		go func() {
-			resultChan <- search.Result{
+			resultChan <- sseResult{Result: search.Result{
 				Match:   imgutil.Match{Path: "/test/image.jpg", Similarity: 95.5},
 				Total:   10,
 				Scanned: 1,
-			}
-			resultChan <- search.Result{Done: true, Total: 10, Scanned: 10}
+			}}
+			resultChan <- sseResult{Result: search.Result{Done: true, Total: 10, Scanned: 10}}
 			close(resultChan)
 		}()
 
@@ -680,7 +755,7 @@ func TestHandleResults(t *testing.T) {
 		server := NewWithOptions(8080, "", "")
 
 		searchID := "test-disconnect-456"
-		resultChan := make(chan search.Result, 10)
+		resultChan := make(chan sseResult, 10)
 		_, cancel := context.WithCancel(context.Background())
 		now := time.Now()
 		server.searchesMu.Lock()
@@ -696,11 +771,11 @@ func TestHandleResults(t *testing.T) {
 
 		// Send one result, then cancel the request context
 		go func() {
-			resultChan <- search.Result{
+			resultChan <- sseResult{Result: search.Result{
 				Match:   imgutil.Match{Path: "/test/image.jpg", Similarity: 90.0},
 				Total:   10,
 				Scanned: 1,
-			}
+			}}
 			// Give the handler time to process, then simulate disconnect
 			time.Sleep(10 * time.Millisecond)
 			cancelReq()

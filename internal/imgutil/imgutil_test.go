@@ -2,7 +2,6 @@ package imgutil
 
 import (
 	"bytes"
-	"encoding/base64"
 	"image"
 	"image/color"
 	"os"
@@ -303,7 +302,7 @@ func TestFindImages(t *testing.T) {
 }
 
 func TestGenerateThumbnail(t *testing.T) {
-	t.Run("generates valid base64", func(t *testing.T) {
+	t.Run("generates valid JPEG", func(t *testing.T) {
 		img := testutil.SolidColorImage(200, 200, color.RGBA{0, 0, 255, 255})
 		path, err := testutil.CreateTempJPEG(img)
 		if err != nil {
@@ -317,16 +316,13 @@ func TestGenerateThumbnail(t *testing.T) {
 			t.Errorf("GenerateThumbnail returned error: %v", err)
 		}
 
-		// Verify it's valid base64
-		decoded, err := base64.StdEncoding.DecodeString(thumb)
-		if err != nil {
-			t.Errorf("Invalid base64: %v", err)
-		}
-
 		// Verify it's a valid JPEG
-		_, _, err = image.Decode(bytes.NewReader(decoded))
+		_, format, err := image.Decode(bytes.NewReader(thumb))
 		if err != nil {
-			t.Errorf("Decoded data is not valid image: %v", err)
+			t.Errorf("Thumbnail data is not a valid image: %v", err)
+		}
+		if format != "jpeg" {
+			t.Errorf("Thumbnail format = %q, want jpeg", format)
 		}
 	})
 
@@ -343,8 +339,7 @@ func TestGenerateThumbnail(t *testing.T) {
 			t.Fatalf("GenerateThumbnail returned error: %v", err)
 		}
 
-		decoded, _ := base64.StdEncoding.DecodeString(thumb)
-		thumbImg, _, _ := image.Decode(bytes.NewReader(decoded))
+		thumbImg, _, _ := image.Decode(bytes.NewReader(thumb))
 
 		bounds := thumbImg.Bounds()
 		if bounds.Dx() > 50 || bounds.Dy() > 50 {
@@ -366,8 +361,7 @@ func TestGenerateThumbnail(t *testing.T) {
 			t.Fatalf("GenerateThumbnail returned error: %v", err)
 		}
 
-		decoded, _ := base64.StdEncoding.DecodeString(thumb)
-		thumbImg, _, _ := image.Decode(bytes.NewReader(decoded))
+		thumbImg, _, _ := image.Decode(bytes.NewReader(thumb))
 
 		bounds := thumbImg.Bounds()
 		ratio := float64(bounds.Dx()) / float64(bounds.Dy())

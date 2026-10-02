@@ -163,38 +163,6 @@ func TestRun(t *testing.T) {
 		}
 	})
 
-	t.Run("results include thumbnails", func(t *testing.T) {
-		tmpDir, cleanup, err := testutil.CreateTempDirWithSubdirs()
-		if err != nil {
-			t.Fatalf("Failed to create temp dir: %v", err)
-		}
-		defer cleanup()
-
-		sourceImg := testutil.SolidColorImage(32, 32, color.RGBA{255, 0, 0, 255})
-		sourcePath, _ := testutil.CreateTempJPEG(sourceImg)
-		defer os.Remove(sourcePath)
-
-		sourceData := imgutil.LoadAndHash(sourcePath)
-
-		config := Config{
-			SearchDir: tmpDir,
-			Threshold: 0.0,
-			Workers:   1,
-		}
-
-		var hasThumbnail bool
-
-		Run(context.Background(), sourceData, config, func(r Result) {
-			if r.Match.Path != "" && r.Thumbnail != "" {
-				hasThumbnail = true
-			}
-		})
-
-		if !hasThumbnail {
-			t.Error("Expected at least one result with thumbnail")
-		}
-	})
-
 	t.Run("scanned count increments", func(t *testing.T) {
 		tmpDir, cleanup, err := testutil.CreateTempDirWithSubdirs()
 		if err != nil {
@@ -375,11 +343,10 @@ func TestResult(t *testing.T) {
 				Similarity: 95.5,
 				Hash:       0xFFFF,
 			},
-			Thumbnail: "base64data",
-			Total:     100,
-			Scanned:   50,
-			Done:      false,
-			Error:     "",
+			Total:   100,
+			Scanned: 50,
+			Done:    false,
+			Error:   "",
 		}
 
 		if result.Match.Path != "/path/to/image.jpg" {
@@ -534,9 +501,6 @@ func TestRunTopN(t *testing.T) {
 					t.Errorf("Match %d similarity = %.4f, want %.4f (path %s)",
 						i, m.Match.Similarity, expected[i].Similarity, m.Match.Path)
 				}
-				if m.Thumbnail == "" {
-					t.Errorf("Match %d (%s) missing thumbnail", i, m.Match.Path)
-				}
 			}
 
 			if len(progress) == 0 {
@@ -562,11 +526,6 @@ func TestRunTopN(t *testing.T) {
 
 		if len(matches) != len(expected) {
 			t.Errorf("Expected %d streamed matches, got %d", len(expected), len(matches))
-		}
-		for _, m := range matches {
-			if m.Thumbnail == "" {
-				t.Errorf("Streamed match %s missing thumbnail", m.Match.Path)
-			}
 		}
 		if len(done) != 1 || done[0].Scanned != len(expected) {
 			t.Errorf("Expected one Done result with Scanned=%d, got %+v", len(expected), done)

@@ -26,9 +26,16 @@ import (
 //go:embed template.html app.js
 var content embed.FS
 
+// sseResult is the SSE payload sent to the browser: a search result plus
+// a base64-encoded JPEG thumbnail for matches.
+type sseResult struct {
+	search.Result
+	Thumbnail string `json:"thumbnail,omitempty"`
+}
+
 // searchState tracks a running search and its cancellation.
 type searchState struct {
-	results      chan search.Result
+	results      chan sseResult
 	cancel       context.CancelFunc
 	lastActivity time.Time
 	consuming    bool // true while a client is streaming results
@@ -255,7 +262,7 @@ func (s *Server) cleanupAbandonedSearches() {
 				if time.Since(state.lastActivity) > timeout {
 					state.cancel()
 					delete(s.searches, id)
-					go func(ch chan search.Result) {
+					go func(ch chan sseResult) {
 						for range ch {
 						}
 					}(state.results)
@@ -362,7 +369,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	searchID := generateSearchID()
 
 	// Create result channel and cancellation context
-	resultChan := make(chan search.Result, 100)
+	resultChan := make(chan sseResult, 100)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s.searchesMu.Lock()
@@ -378,8 +385,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer close(resultChan)
 		search.Run(ctx, sourceData, config, func(result search.Result) {
+			payload := sseResult{Result: result}
+			if result.Match.Path != "" {
+				// Thumbnail errors are ignored; the browser falls back
+				// to /api/thumbnail when the field is empty.
+				if thumb, err := imgutil.GenerateThumbnail(result.Match.Path, 200); err == nil {
+					payload.Thumbnail = base64.StdEncoding.EncodeToString(thumb)
+				}
+			}
 			select {
-			case resultChan <- result:
+			case resultChan <- payload:
 			case <-ctx.Done():
 			}
 		})
@@ -466,14 +481,8 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := base64.StdEncoding.DecodeString(thumb)
-	if err != nil {
-		http.Error(w, "Failed to decode thumbnail", http.StatusInternalServerError)
-		return
-	}
-
 	w.Header().Set("Content-Type", "image/jpeg")
-	w.Write(data)
+	w.Write(thumb)
 }
 
 func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {

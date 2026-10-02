@@ -2,7 +2,6 @@ package imgutil
 
 import (
 	"bytes"
-	"encoding/base64"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -100,17 +99,18 @@ func FindImages(root string) ([]string, error) {
 	return images, err
 }
 
-// GenerateThumbnail creates a base64 encoded JPEG thumbnail
-func GenerateThumbnail(path string, maxSize uint) (string, error) {
+// GenerateThumbnail creates a JPEG thumbnail no larger than maxSize in
+// either dimension and returns the raw JPEG bytes.
+func GenerateThumbnail(path string, maxSize uint) ([]byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer file.Close()
 
 	img, _, err := image.Decode(file)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// Resize maintaining aspect ratio
@@ -120,9 +120,8 @@ func GenerateThumbnail(path string, maxSize uint) (string, error) {
 	var buf bytes.Buffer
 	err = jpeg.Encode(&buf, thumb, &jpeg.Options{Quality: 80})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	// Return base64 encoded
-	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+	return buf.Bytes(), nil
 }
